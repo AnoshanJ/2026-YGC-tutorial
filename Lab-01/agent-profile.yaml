@@ -1,0 +1,30 @@
+# Agent profile — the agent's identity and runtime configuration.
+#
+# Edit any field and save; run.py will hot-reload on your next message
+# (you'll see "[dim]config reloaded[/dim]" in the REPL). No restart needed.
+#
+# This file is THE agent in config form. The Python harness (agent/core.py)
+# reads this at agent build time and constructs the corresponding Agent().
+
+agent:
+  id: cs-agent-v1
+  name: Customer Support Agent v1
+  model: gpt-4o-2024-08-06
+
+# §2 — which tool set is registered.
+# "bad" = vague names, single-string args, useless returns (§1 fumble setup)
+# "good" = action-verb names, typed params, structured errors (production-grade)
+tool_set: good
+
+# §3 — memory architecture.
+# conversation = within-session multi-turn (always on; handled by the REPL)
+# episodic    = past sessions per customer, loaded from memory/customer_<id>.md
+# semantic    = cross-session vector retrieval (Mem0 + Qdrant; cameo only)
+memory:
+  conversation: true
+  episodic: false
+  semantic: false
+
+# §6 (and §4b) — scoped agent identity. The agent has its OWN refund authority,
+# not the user's. Refunds > this cap MUST be escalated; splitting is prohibited.
+refund_cap_usd: 200.0

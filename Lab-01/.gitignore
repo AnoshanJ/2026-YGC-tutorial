@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+.DS_Store
+
+# Runtime mock state (seeded from mocks/seeds/ on first run; reset with `python reset.py`)
+mocks/data/*.json
+
+# Runtime customer memory (Bob's is committed as the seed)
+memory/customer_*.md
+!memory/customer_cust_002.md
+
+*.swp

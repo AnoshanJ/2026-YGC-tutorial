@@ -1,0 +1,28 @@
+[project]
+name = "lab1-agent"
+version = "0.1.0"
+description = "Lab 1 — A Practical Guide to AI Agents in the Enterprise. Customer support agent demo."
+requires-python = ">=3.11"
+dependencies = [
+    "openai-agents>=0.1.0",
+    "openai>=1.40.0",
+    "mcp>=1.0.0",
+    "pydantic>=2.0",
+    "python-dotenv>=1.0.0",
+    "rich>=13.7.0",
+    "prompt-toolkit>=3.0",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+mem0 = [
+    "mem0ai>=0.1.0",
+    "qdrant-client>=1.7.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["agent", "mocks"]
