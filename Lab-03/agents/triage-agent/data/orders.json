@@ -1,0 +1,8 @@
+[
+  {"id": "1234", "status": "shipped", "carrier": "UPS", "tracking": "1Z999AA10123456784", "eta": "2026-05-16"},
+  {"id": "5001", "status": "delivered", "carrier": "UPS", "tracking": "1Z999AA10987654321", "eta": "2026-05-02"},
+  {"id": "5002", "status": "shipped", "carrier": "FedEx", "tracking": "612345678901", "eta": "2026-05-12"},
+  {"id": "2001", "status": "processing", "carrier": "DHL", "tracking": "", "eta": "2026-05-15"},
+  {"id": "3001", "status": "shipped", "carrier": "Yamato", "tracking": "JP-A1B2-3C4D", "eta": "2026-05-05"},
+  {"id": "9999", "status": "not_found", "carrier": "", "tracking": "", "eta": ""}
+]

@@ -1,0 +1,12 @@
+[
+  {"id": "C-1001", "email": "ava.morgan@example.com", "name": "Ava Morgan", "tier": "gold", "signup_date": "2023-04-12", "region": "na"},
+  {"id": "C-1002", "email": "lukas.weber@example.de", "name": "Lukas Weber", "tier": "silver", "signup_date": "2022-11-03", "region": "emea"},
+  {"id": "C-1003", "email": "sora.tanaka@example.jp", "name": "Sora Tanaka", "tier": "gold", "signup_date": "2024-01-19", "region": "apac"},
+  {"id": "C-1004", "email": "diego.alvarez@example.com", "name": "Diego Alvarez", "tier": "bronze", "signup_date": "2025-02-07", "region": "na"},
+  {"id": "C-1005", "email": "marie.dubois@example.fr", "name": "Marie Dubois", "tier": "platinum", "signup_date": "2021-08-14", "region": "emea"},
+  {"id": "C-1006", "email": "kai.hayashi@example.jp", "name": "Kai Hayashi", "tier": "silver", "signup_date": "2023-09-22", "region": "apac"},
+  {"id": "C-1007", "email": "olivia.smith@example.com", "name": "Olivia Smith", "tier": "gold", "signup_date": "2022-06-30", "region": "na"},
+  {"id": "C-1008", "email": "hans.muller@example.de", "name": "Hans Muller", "tier": "bronze", "signup_date": "2024-12-11", "region": "emea"},
+  {"id": "C-1009", "email": "priya.nair@example.in", "name": "Priya Nair", "tier": "silver", "signup_date": "2024-05-08", "region": "apac"},
+  {"id": "C-1010", "email": "noah.brown@example.com", "name": "Noah Brown", "tier": "platinum", "signup_date": "2020-03-17", "region": "na"}
+]

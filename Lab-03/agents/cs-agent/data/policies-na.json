@@ -1,0 +1,8 @@
+[
+  {"id": "POL-NA-001", "title": "Returns Window", "body": "Customers in North America may return any unworn or unopened item within 30 days of delivery for a full refund. Electronics carry a 14-day window."},
+  {"id": "POL-NA-002", "title": "Refund Method", "body": "Refunds in North America are issued to the original payment method within 5 business days of return receipt."},
+  {"id": "POL-NA-003", "title": "Shipping Damage", "body": "If an item arrived damaged, photograph the damage and contact support within 7 days. Replacements ship within 2 business days at no cost."},
+  {"id": "POL-NA-004", "title": "Cancellation", "body": "Orders may be cancelled at no charge until they enter the 'shipped' status. After shipment, follow the standard returns process."},
+  {"id": "POL-NA-005", "title": "Escalation Threshold", "body": "Any refund request above $200 USD must be reviewed by a human agent. The agent should call escalate_to_human in such cases."},
+  {"id": "POL-NA-006", "title": "Address Change", "body": "Shipping address updates are accepted for orders in 'processing' status only; once shipped the address is locked."}
+]

@@ -1,0 +1,87 @@
+openapi: 3.0.3
+info:
+  title: Order Triage Crew
+  version: 0.1.0
+  description: >
+    Multi-agent (CrewAI) service that classifies an inbound customer support
+    email, routes it to the owning team, drafts a response, and verifies the
+    draft for tone and policy compliance. Each sub-agent emits its own OTEL
+    agent-span.
+servers:
+  - url: http://localhost:8001
+    description: Local
+paths:
+  /health:
+    get:
+      summary: Liveness probe
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: ok }
+  /triage:
+    post:
+      summary: Triage an inbound email through the full crew pipeline
+      operationId: triageEmail
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TriageRequest"
+            examples:
+              refund:
+                value:
+                  from: ava.morgan@example.com
+                  subject: Order 5001 arrived broken
+                  body: >
+                    My wireless headphones (order 5001) arrived with a cracked
+                    earcup. I would like a refund. Please advise.
+              shipping:
+                value:
+                  from: lukas.weber@example.de
+                  subject: Where is order 2001?
+                  body: >
+                    Hello, I placed order 2001 a week ago and have heard nothing.
+                    Can you check tracking?
+      responses:
+        "200":
+          description: Triage decision and final response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TriageResponse"
+        "500":
+          description: Crew execution failure
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  detail: { type: string }
+components:
+  schemas:
+    TriageRequest:
+      type: object
+      required: [body]
+      properties:
+        from:
+          type: string
+          description: Sender email address
+        subject:
+          type: string
+        body:
+          type: string
+          description: Plain-text email body
+    TriageResponse:
+      type: object
+      properties:
+        result:
+          description: >
+            CrewAI output — either the verifier's structured JSON (when parsable)
+            or the raw text the crew produced. Format varies by run; consumers
+            should treat it as opaque.

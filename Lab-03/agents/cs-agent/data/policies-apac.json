@@ -1,0 +1,9 @@
+[
+  {"id": "POL-APAC-001", "title": "Returns Window", "body": "Customers in APAC may return unopened items within 21 days of delivery for a full refund. Opened electronics are non-returnable except for defects."},
+  {"id": "POL-APAC-002", "title": "Refund Method", "body": "Refunds in APAC are issued to the original payment method within 7 business days. Refunds in JPY, INR, SGD are supported."},
+  {"id": "POL-APAC-003", "title": "Shipping Damage", "body": "Report damage within 5 days of delivery with photo evidence. Replacements ship within 3 business days."},
+  {"id": "POL-APAC-004", "title": "Cancellation", "body": "Orders may be cancelled before they enter the 'shipped' status. Cancellations after shipment follow the standard returns process."},
+  {"id": "POL-APAC-005", "title": "Escalation Threshold", "body": "Refund requests above ¥20,000 (JPY) or equivalent must be reviewed by a human agent."},
+  {"id": "POL-APAC-006", "title": "Address Change", "body": "Address updates are accepted only while the order is in 'processing'. Once shipped, contact the carrier directly."},
+  {"id": "POL-APAC-007", "title": "Holiday Service", "body": "During regional holidays, refund processing may take up to 10 business days. The agent should set this expectation explicitly."}
+]

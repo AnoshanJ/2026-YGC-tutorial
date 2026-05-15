@@ -1,0 +1,6 @@
+[
+  {"name": "refunds-team", "categories": ["refund_request"], "queue": "support.refunds", "sla_hours": 4, "lead": "Maya Chen"},
+  {"name": "shipping-team", "categories": ["shipping_question"], "queue": "support.shipping", "sla_hours": 8, "lead": "Tom Rivera"},
+  {"name": "product-team", "categories": ["product_question"], "queue": "support.product", "sla_hours": 24, "lead": "Anika Patel"},
+  {"name": "escalations-team", "categories": ["complaint", "other"], "queue": "support.escalations", "sla_hours": 2, "lead": "Jordan Lee"}
+]

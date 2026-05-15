@@ -1,0 +1,8 @@
+[
+  {"id": "P-001", "title": "Refund Window", "body": "Refunds are available within 30 days of delivery for unopened items, 14 days for electronics."},
+  {"id": "P-002", "title": "Tone Guidelines", "body": "Responses must be empathetic, never combative. Acknowledge the customer's feelings before stating policy."},
+  {"id": "P-003", "title": "Shipping Inquiries", "body": "Provide carrier name, tracking number, and current ETA. Do not promise dates earlier than the carrier's estimate."},
+  {"id": "P-004", "title": "Complaint Handling", "body": "Complaints must always be reviewed by a human escalations agent before sending; the verifier flags any auto-resolved complaint as needs_revision."},
+  {"id": "P-005", "title": "Product Questions", "body": "Answer with documented product facts only. If unsure, escalate to the product team. Do not invent specifications."},
+  {"id": "P-006", "title": "PII", "body": "Never include credit-card numbers, full mailing addresses, or government IDs in outbound responses."}
+]

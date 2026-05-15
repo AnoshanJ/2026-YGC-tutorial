@@ -1,0 +1,9 @@
+[
+  {"id": "POL-EMEA-001", "title": "Returns Window (EU)", "body": "Under EU consumer law, customers have 14 days from delivery to withdraw from the contract and return any item for a full refund, with extended 30-day windows for non-electronics."},
+  {"id": "POL-EMEA-002", "title": "Refund Method", "body": "Refunds in EMEA are issued to the original payment method within 7 business days of return receipt, in EUR or local currency where applicable."},
+  {"id": "POL-EMEA-003", "title": "Shipping Damage", "body": "Items arriving damaged must be reported within 7 days. Replacements ship within 5 business days from EU fulfilment centres."},
+  {"id": "POL-EMEA-004", "title": "Cancellation", "body": "Orders may be cancelled at no charge until they enter the 'shipped' status. After shipment the EU withdrawal-right window applies."},
+  {"id": "POL-EMEA-005", "title": "Escalation Threshold", "body": "Refund requests above €150 must be reviewed by a human agent. Lower values may be processed by the agent directly."},
+  {"id": "POL-EMEA-006", "title": "Address Change", "body": "Shipping address updates are accepted for orders in 'processing' status only."},
+  {"id": "POL-EMEA-007", "title": "Language Routing", "body": "Customers writing in German, French, or English are served in their language. Other languages are escalated to a multilingual agent."}
+]
