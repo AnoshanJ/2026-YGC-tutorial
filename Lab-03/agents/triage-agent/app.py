@@ -6,13 +6,21 @@ verdict plus the final drafted response. ``GET /health`` for liveness.
 
 from __future__ import annotations
 
-import logging
-from typing import Any
+import os
 
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, ConfigDict, Field
+# Point HOME at a writable directory before importing CrewAI. Some container
+# runtimes leave HOME unset; ``~`` then resolves to ``/nonexistent`` and
+# CrewAI's instrumented telemetry write fails with errno 30. ``main.py``
+# does the same; this is the defensive copy for direct ``uvicorn`` invocations.
+os.environ.setdefault("HOME", "/tmp")
 
-from crew import run_triage
+import logging  # noqa: E402
+from typing import Any  # noqa: E402
+
+from fastapi import FastAPI, HTTPException  # noqa: E402
+from pydantic import BaseModel, ConfigDict, Field  # noqa: E402
+
+from crew import run_triage  # noqa: E402
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("triage-agent")

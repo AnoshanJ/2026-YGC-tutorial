@@ -26,9 +26,14 @@ Each sub-agent produces its own OTEL agent-span via AM's auto-instrumentation. T
 
 ## Build & deploy via AM
 
-Buildpack-based — no Dockerfile. AM detects Python via `requirements.txt`. Run command: `uvicorn app:app --host 0.0.0.0 --port 8001`.
+Buildpack-based — no Dockerfile. AM detects Python via `requirements.txt`. Run command: **`python main.py`** (binds uvicorn to port 8001 programmatically).
 
 OTEL is handled by AM's auto-instrumentation trait at deploy time; the agent code does not set up OTEL itself.
+
+Two AM-specific quirks the code already works around:
+
+- **`HOME=/tmp`** is set at the very top of `main.py` (and defensively in `app.py`). CrewAI's instrumented telemetry writes to `~/.crewai`; many container runtimes leave `HOME` unset, so `~` resolves to `/nonexistent` and the write fails with `[Errno 30] Read-only file system`.
+- **`wrapt>=1.16.0`** is pinned in `requirements.txt`. Older `wrapt` C-extensions reject `module=` as a kwarg to `wrap_function_wrapper`, which the trait-installed `openinference` instrumentors use — symptom is `wrap_function_wrapper() got an unexpected keyword argument 'module'`.
 
 ## Environment
 
@@ -40,11 +45,11 @@ OTEL is handled by AM's auto-instrumentation trait at deploy time; the agent cod
 
 ```bash
 cd agents/triage-agent
-python -m venv .venv && source .venv/bin/activate
+python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
 export OPENAI_API_KEY=...
-uvicorn app:app --host 0.0.0.0 --port 8001
+python main.py
 ```
 
 ```bash

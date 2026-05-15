@@ -15,9 +15,11 @@ Single-agent customer-support assistant built on LangGraph's prebuilt ReAct agen
 
 ## Build & deploy via AM
 
-AM uses Google Cloud Buildpacks — no Dockerfile required. Detection is by the presence of `requirements.txt`. The run command should be `uvicorn app:app --host 0.0.0.0 --port 8000`.
+AM uses Google Cloud Buildpacks — no Dockerfile required. Detection is by the presence of `requirements.txt`. The run command is **`python main.py`** (which binds uvicorn to port 8000 programmatically).
 
 OTEL is handled by AM's auto-instrumentation trait at deploy time; the agent code does not set up OTEL itself.
+
+`wrapt>=1.16.0` is pinned in `requirements.txt`. Older `wrapt` C-extensions reject `module=` as a kwarg to `wrap_function_wrapper`, which the trait-installed `openinference-instrumentation-langchain` uses — symptom is `ERROR:root:Error initializing LangChain instrumentor: wrap_function_wrapper() got an unexpected keyword argument 'module'`.
 
 ## Tools (in-process mocks under `clients/`)
 
@@ -59,7 +61,7 @@ pip install -r requirements.txt
 
 export OPENAI_API_KEY=...
 export REGION=na CURRENCY=USD REFUND_CAP=200
-uvicorn app:app --host 0.0.0.0 --port 8000
+python main.py
 ```
 
 ```bash
