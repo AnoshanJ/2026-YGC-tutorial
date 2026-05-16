@@ -1,17 +1,8 @@
-# triage-agent — Order Triage Crew (CrewAI, API-type)
+# triage-agent — Order Triage Crew (CrewAI)
 
-Multi-agent CrewAI service that classifies, routes, drafts, and verifies a response to an inbound customer support email. Uses OpenAI's `gpt-4o-mini` for all sub-agents. Used as the *external* working agent in WSO2Con Lab 3 — the showcase for agent-level OTEL span hierarchies.
+Multi-agent CrewAI service that classifies, routes, drafts, and verifies a response to an inbound customer support email. Uses OpenAI's `gpt-4o-mini` for all sub-agents.
 
-## AM contract — API-type (custom-api)
-
-| Aspect | Spec |
-|---|---|
-| Agent type | `api` / sub-type `custom-api` |
-| Interface type | `OPENAPI` (declared via `InputInterface.SchemaPath`) |
-| Schema path | [`openapi.yaml`](openapi.yaml) (this agent's root) |
-| Port | `8001` (set via `runCommand` / `InputInterface.Port`) |
-| Auth | Optional `X-API-Key` (when `enableApiKeySecurity=true`) |
-| Routes | Declared in `openapi.yaml` — `POST /triage` and `GET /health` |
+Registered in AM as an **external** agent — not built or hosted by AM. The agent runs on the demo lead's machine (or anywhere with outbound HTTPS to the AM traces observer) and pushes OTEL spans into AM via amp-instrumentation. Its AM record auto-attaches the first time a span is received.
 
 ## Crew
 
@@ -22,34 +13,53 @@ Sequential CrewAI process, four sub-agents:
 3. **Response Drafter** — write a concise reply, grounding policy claims via `search_policy_kb` and `lookup_order_status`.
 4. **Response Verifier** — `tone_check` + `policy_compliance_check`; emit `approved` or `needs_revision`.
 
-Each sub-agent produces its own OTEL agent-span via AM's auto-instrumentation. The resulting trace shape is the multi-agent contrast point against `cs-agent`'s single-agent trace.
+Each sub-agent produces its own OTEL agent-span via amp-instrumentation. The resulting trace shape is the multi-agent contrast point against `cs-agent`'s single-agent trace.
 
-## Build & deploy via AM
+## How OTEL push works
 
-Buildpack-based — no Dockerfile. AM detects Python via `requirements.txt`. Run command: **`bash start.sh`** (not `python main.py` — see below).
+`amp-instrument` is the CLI wrapper bundled with `amp-instrumentation` (a separate pip package — see `seed-2.sh`, which installs it into a venv at first run). It:
 
-OTEL is handled by AM's auto-instrumentation trait at deploy time; the agent code does not set up OTEL itself.
+- Loads OTEL auto-instrumentation hooks for CrewAI, OpenAI, LangChain, etc. via the standard Python `sitecustomize` mechanism, so they fire on `import` regardless of how the agent code is structured.
+- Wires the OTEL SDK's HTTP exporter to `AMP_OTEL_ENDPOINT` and authenticates spans with `AMP_AGENT_API_KEY`. Both env vars must be set in the process environment.
 
-Two AM-specific quirks the code works around:
+Run-time contract:
 
-- **`bash start.sh` as the run command** — [`start.sh`](start.sh) exports `HOME=/tmp` and `CREWAI_STORAGE_DIR=/tmp/.crewai` before invoking `python main.py`. This has to happen at the *shell* layer because AM's amp-instrumentation imports `crewai` from `sitecustomize`, *before* main.py runs — by then it's too late to set the env vars from Python. `crewai.rag.chromadb.constants` mkdirs a storage path at module-import time, defaulting to `~/.local/share/CrewAI`; on Buildpacks containers `HOME` is unset, so `~` → `/nonexistent` → `[Errno 30] Read-only file system`. The wrapper short-circuits the storage path to `/tmp` (which is always writable and which we don't care about — we don't use CrewAI's `memory` or `Knowledge` features at runtime).
-- **`wrapt>=1.16.0`** is pinned in `requirements.txt`. Older `wrapt` C-extensions reject `module=` as a kwarg to `wrap_function_wrapper`, which the trait-installed `openinference` instrumentors use — symptom is `wrap_function_wrapper() got an unexpected keyword argument 'module'`.
+| Var | Required | Source |
+|---|---|---|
+| `AMP_OTEL_ENDPOINT` | yes | seed/.env (defaults to `http://localhost:22893/otel` locally) |
+| `AMP_AGENT_API_KEY` | yes | minted by `POST /api/v1/orgs/{org}/projects/{proj}/agents/{name}/token?environment={env}` — seed-2 does this automatically |
+| `OPENAI_API_KEY`    | yes | seed/.env — the crew calls OpenAI directly |
 
-## Environment
-
-| Var | Required | Default | Meaning |
-|---|---|---|---|
-| `OPENAI_API_KEY` | yes | — | OpenAI credentials |
-
-## Run locally
+## Run via seed-2 (recommended)
 
 ```bash
-cd agents/triage-agent
+cd Lab-03/seed
+bash seed-2.sh
+```
+
+`seed-2.sh` creates a venv under `agents/triage-agent/.venv` (one-time, ~1 min), installs `requirements.txt` + `amp-instrumentation`, fetches the AMP token, exports it along with `AMP_OTEL_ENDPOINT` + `OPENAI_API_KEY`, and starts the agent in the background. PID + log are stored in `seed/.seed-cache/`. Stop with:
+
+```bash
+kill $(cat Lab-03/seed/.seed-cache/triage-agent.pid)
+```
+
+## Run manually
+
+```bash
+cd Lab-03/agents/triage-agent
 python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements.txt amp-instrumentation==0.1.7
 
 export OPENAI_API_KEY=...
-python main.py
+export AMP_OTEL_ENDPOINT=http://localhost:22893/otel
+export AMP_AGENT_API_KEY=$(curl -sS -X POST \
+  -H "Authorization: Bearer $AM_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"expires_in":"8760h"}' \
+  "http://localhost:9000/api/v1/orgs/default/projects/lab-03/agents/lab-03-triage-agent/token?environment=default" \
+  | jq -r '.apiKey // .token')
+
+amp-instrument python main.py
 ```
 
 ```bash

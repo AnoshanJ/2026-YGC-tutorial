@@ -1,10 +1,17 @@
-"""Programmatic entrypoint for the Order Triage Crew.
+"""Entrypoint for the Order Triage Crew (CrewAI, multi-agent).
 
-Invoked via the ``start.sh`` wrapper at deploy time so that ``HOME`` and
-``CREWAI_STORAGE_DIR`` are exported into the process environment *before*
-Python starts. This is required because AM's amp-instrumentation imports
-CrewAI from ``sitecustomize``, which runs before any code in this module —
-see ``start.sh`` for the full explanation.
+Run locally (not via the AM build path) as an external agent:
+
+    AMP_OTEL_ENDPOINT="http://localhost:22893/otel"   # AM traces observer
+    AMP_AGENT_API_KEY="<from POST /agents/<name>/token>"
+    amp-instrument python main.py
+
+``amp-instrument`` is a CLI shipped with the ``amp-instrumentation`` package;
+it injects OTEL auto-instrumentation for CrewAI / OpenAI / LangChain at
+interpreter startup. Traces are pushed to AMP_OTEL_ENDPOINT and the agent's
+record in AM auto-registers (or attaches) on the first span.
+
+``seed-2.sh`` handles the env wiring + process management for the demo.
 """
 
 from __future__ import annotations
