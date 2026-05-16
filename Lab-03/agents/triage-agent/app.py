@@ -2,25 +2,23 @@
 
 Exposes ``POST /triage`` taking an email payload and returning the verifier's
 verdict plus the final drafted response. ``GET /health`` for liveness.
+
+This module imports ``crew`` which transitively imports CrewAI. CrewAI's
+``rag.chromadb.constants`` module evaluates ``DEFAULT_STORAGE_PATH`` at
+import time, which mkdirs the storage dir — failing on Buildpacks
+containers where ``HOME`` is unset. ``start.sh`` exports the required env
+vars before Python boots so this import path succeeds.
 """
 
 from __future__ import annotations
 
-import os
+import logging
+from typing import Any
 
-# Point HOME at a writable directory before importing CrewAI. Some container
-# runtimes leave HOME unset; ``~`` then resolves to ``/nonexistent`` and
-# CrewAI's instrumented telemetry write fails with errno 30. ``main.py``
-# does the same; this is the defensive copy for direct ``uvicorn`` invocations.
-os.environ.setdefault("HOME", "/tmp")
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel, ConfigDict, Field
 
-import logging  # noqa: E402
-from typing import Any  # noqa: E402
-
-from fastapi import FastAPI, HTTPException  # noqa: E402
-from pydantic import BaseModel, ConfigDict, Field  # noqa: E402
-
-from crew import run_triage  # noqa: E402
+from crew import run_triage
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("triage-agent")

@@ -1,25 +1,17 @@
 """Programmatic entrypoint for the Order Triage Crew.
 
-Used as the AM build's run command: ``python main.py``.
-
-The first thing we do is point ``HOME`` at a writable directory. CrewAI's
-instrumentor (auto-attached by Agent Manager at deploy time) initializes
-CrewAI's internal telemetry, which writes to ``~/.crewai`` on first use.
-Many container runtimes leave ``HOME`` unset; ``os.path.expanduser('~')``
-then resolves to ``/nonexistent`` (the system-account default), and the
-write fails with ``[Errno 30] Read-only file system``. ``HOME=/tmp`` is
-benign and writable on every Linux/macOS container image we target.
+Invoked via the ``start.sh`` wrapper at deploy time so that ``HOME`` and
+``CREWAI_STORAGE_DIR`` are exported into the process environment *before*
+Python starts. This is required because AM's amp-instrumentation imports
+CrewAI from ``sitecustomize``, which runs before any code in this module —
+see ``start.sh`` for the full explanation.
 """
 
 from __future__ import annotations
 
-import os
+import uvicorn
 
-os.environ.setdefault("HOME", "/tmp")
-
-import uvicorn  # noqa: E402
-
-from app import app  # noqa: E402
+from app import app
 
 
 def main() -> None:

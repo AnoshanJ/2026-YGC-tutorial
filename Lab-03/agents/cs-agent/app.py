@@ -2,7 +2,16 @@
 
 Implements the AM chat-agent contract: ``POST /chat`` on port 8000 accepting
 ``{session_id, message, context}`` and returning ``{response, session_id}``.
-``GET /health`` is provided for local checks (AM does not require it).
+
+Customer identity is supplied via the ``X-Customer-Id`` request header (set
+by the mock-login chat frontend). The full customer profile is loaded server-
+side and injected into the per-request system message; the agent never asks
+for or looks up the user. Customer attributes are also attached to the
+current OTEL root span so traces are filterable by customer/tier/region in
+the AM console.
+
+A simple in-memory message store keyed by ``session_id`` keeps conversation
+history across turns — sufficient for demo prep; not durable across restarts.
 """
 
 from __future__ import annotations
@@ -10,11 +19,21 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
-from langchain_core.messages import AIMessage, HumanMessage
+from fastapi import FastAPI, Header, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from pydantic import BaseModel
 
-from agent import build_agent
+# OpenTelemetry is injected at deploy time by AM's auto-instrumentation;
+# in local dev (running main.py outside AM) the package may not be installed,
+# so the import is optional. Span attributes are skipped when unavailable.
+try:
+    from opentelemetry import trace as _otel_trace
+except ImportError:  # pragma: no cover
+    _otel_trace = None  # type: ignore[assignment]
+
+from agent import build_agent, system_message_for
+from clients import customers as customers_client
 from config import Config
 
 logging.basicConfig(level=logging.INFO)
@@ -30,6 +49,10 @@ log.info(
     CONFIG.escalation_queue,
 )
 
+# session_id -> list of LangChain messages (excluding the system message, which
+# is rebuilt per turn from the authenticated customer profile).
+SESSIONS: dict[str, list[BaseMessage]] = {}
+
 
 class ChatRequest(BaseModel):
     message: str
@@ -44,6 +67,18 @@ class ChatResponse(BaseModel):
 
 app = FastAPI(title="CS Agent", version="0.1.0")
 
+# CORS for the mock-login chat frontend served from a local static server.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ],
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["x-api-key", "X-Customer-Id", "Content-Type", "Authorization"],
+)
+
 
 @app.get("/health")
 def health() -> dict[str, Any]:
@@ -55,22 +90,56 @@ def health() -> dict[str, Any]:
 
 
 @app.post("/chat", response_model=ChatResponse)
-def chat(req: ChatRequest) -> ChatResponse:
+def chat(
+    req: ChatRequest,
+    x_customer_id: str | None = Header(default=None, alias="X-Customer-Id"),
+) -> ChatResponse:
+    if not x_customer_id:
+        raise HTTPException(status_code=400, detail="X-Customer-Id header is required")
+
     try:
-        result = AGENT.invoke({"messages": [HumanMessage(content=req.message)]})
+        customer = customers_client.get_by_id(x_customer_id)
+    except customers_client.CustomerNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    if _otel_trace is not None:
+        span = _otel_trace.get_current_span()
+        span.set_attribute("customer.id", customer["id"])
+        span.set_attribute("customer.tier", customer.get("tier", ""))
+        span.set_attribute("customer.region", customer.get("region", ""))
+        if req.session_id:
+            span.set_attribute("session.id", req.session_id)
+
+    history = SESSIONS.setdefault(req.session_id or "anon", []) if req.session_id else []
+    sys_msg = system_message_for(CONFIG, customer)
+    user_msg = HumanMessage(content=req.message)
+    messages: list[BaseMessage] = [sys_msg, *history, user_msg]
+
+    try:
+        result = AGENT.invoke({"messages": messages})
     except Exception as exc:  # noqa: BLE001
         log.exception("agent invocation failed")
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
-    final: Any = None
-    for m in reversed(result.get("messages", [])):
+    out_messages = result.get("messages", [])
+    final_ai: AIMessage | None = None
+    for m in reversed(out_messages):
         if isinstance(m, AIMessage):
-            final = m.content
+            final_ai = m
             break
-    if final is None:
-        final = "(no response)"
-    if isinstance(final, list):
-        final = "\n".join(
-            part.get("text", "") if isinstance(part, dict) else str(part) for part in final
+
+    final_text: Any = final_ai.content if final_ai is not None else "(no response)"
+    if isinstance(final_text, list):
+        final_text = "\n".join(
+            part.get("text", "") if isinstance(part, dict) else str(part) for part in final_text
         )
-    return ChatResponse(response=str(final), session_id=req.session_id)
+
+    # Persist this turn's user + final AI message so subsequent turns have context.
+    # Skip the system message (rebuilt per turn) and intermediate tool messages —
+    # the LLM has those embedded in tool_calls on the AI message already.
+    if req.session_id:
+        history.append(user_msg)
+        if final_ai is not None:
+            history.append(final_ai)
+
+    return ChatResponse(response=str(final_text), session_id=req.session_id)

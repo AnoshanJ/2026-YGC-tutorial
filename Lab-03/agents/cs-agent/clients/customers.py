@@ -19,6 +19,14 @@ def lookup_by_email(email: str) -> dict[str, Any]:
     raise CustomerNotFound(f"No customer with email {email!r}")
 
 
+def get_by_id(customer_id: str) -> dict[str, Any]:
+    rows = load("customers.json")
+    for c in rows:
+        if c["id"] == customer_id:
+            return c
+    raise CustomerNotFound(f"No customer with id {customer_id!r}")
+
+
 def list_orders(customer_id: str, limit: int = 10) -> list[dict[str, Any]]:
     orders = load("orders.json")
     matched = [o for o in orders if o["customer_id"] == customer_id]

@@ -26,13 +26,13 @@ Each sub-agent produces its own OTEL agent-span via AM's auto-instrumentation. T
 
 ## Build & deploy via AM
 
-Buildpack-based — no Dockerfile. AM detects Python via `requirements.txt`. Run command: **`python main.py`** (binds uvicorn to port 8001 programmatically).
+Buildpack-based — no Dockerfile. AM detects Python via `requirements.txt`. Run command: **`bash start.sh`** (not `python main.py` — see below).
 
 OTEL is handled by AM's auto-instrumentation trait at deploy time; the agent code does not set up OTEL itself.
 
-Two AM-specific quirks the code already works around:
+Two AM-specific quirks the code works around:
 
-- **`HOME=/tmp`** is set at the very top of `main.py` (and defensively in `app.py`). CrewAI's instrumented telemetry writes to `~/.crewai`; many container runtimes leave `HOME` unset, so `~` resolves to `/nonexistent` and the write fails with `[Errno 30] Read-only file system`.
+- **`bash start.sh` as the run command** — [`start.sh`](start.sh) exports `HOME=/tmp` and `CREWAI_STORAGE_DIR=/tmp/.crewai` before invoking `python main.py`. This has to happen at the *shell* layer because AM's amp-instrumentation imports `crewai` from `sitecustomize`, *before* main.py runs — by then it's too late to set the env vars from Python. `crewai.rag.chromadb.constants` mkdirs a storage path at module-import time, defaulting to `~/.local/share/CrewAI`; on Buildpacks containers `HOME` is unset, so `~` → `/nonexistent` → `[Errno 30] Read-only file system`. The wrapper short-circuits the storage path to `/tmp` (which is always writable and which we don't care about — we don't use CrewAI's `memory` or `Knowledge` features at runtime).
 - **`wrapt>=1.16.0`** is pinned in `requirements.txt`. Older `wrapt` C-extensions reject `module=` as a kwarg to `wrap_function_wrapper`, which the trait-installed `openinference` instrumentors use — symptom is `wrap_function_wrapper() got an unexpected keyword argument 'module'`.
 
 ## Environment
