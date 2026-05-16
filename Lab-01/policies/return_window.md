@@ -19,7 +19,7 @@ timeliness applies — see escalation rule below).
 
 ## Agent action
 
-1. Verify delivery date — call `get_order`, check the `placed` date and assume
+1. Verify delivery date — look up the order, check the `placed` date and assume
    delivery happens ~3 days after.
 2. If within window: send return label (escalate with priority `low` since we
    don't have a direct label tool), issue refund once the customer confirms

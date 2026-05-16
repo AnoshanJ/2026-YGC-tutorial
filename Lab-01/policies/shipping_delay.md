@@ -14,9 +14,9 @@ still receives the order; the credit applies to a future purchase.
 
 ## Agent action
 
-Issue a store credit via `issue_refund` with:
-- `amount_usd`: 10 (or 25 if delay > 7 days)
-- `reason`: `"shipping_delay_credit"`
+Issue a store credit:
+- amount: $10 (or $25 if the delay exceeds 7 business days)
+- reason code: `"shipping_delay_credit"`
 
 Cite this policy in the reply.
 

@@ -1,262 +1,265 @@
 """The agent factory — `build_agent()`.
 
-This is the "thin harness" the §1 demo points at. The function below does:
+A thin loader. The agent has NO tools of its own — every tool comes from
+an MCP server declared in `agent-profile.yaml`'s `mcp_servers` list, and
+every `MCPClient` is passed straight to `Agent(tools=[...])` so Strands'
+ToolProvider lifecycle owns the subprocesses end-to-end (`start()` on
+first tool load; `stop()` when the Agent is GC'd / loses its last consumer).
 
-  1. Loads the agent profile from agent-profile.yaml (identity, tool_set,
-     memory toggles, refund cap)
-  2. Picks the tool set (good or bad — the §2 toggle)
-  3. Builds the skill catalog (name + description per skill — Anthropic-
-     style; the agent loads full procedures on demand via read_skill)
-  4. Loads the customer's episodic memory if `memory.episodic: true` and
-     a customer_id was passed
-  5. Wires the MCP policy-KB server
-  6. Constructs `agents.Agent(...)` and returns it
-
-That's it. The intelligence lives in the tools, the skills, the policies,
-and the MCP server. The agent itself is configuration + a control loop
-(loop is inside the SDK; we don't write it).
+For the §2a hands-on: edit the YAML to swap `customer_support_v1` for
+`customer_support_v2`, type `exit`, run `python run.py` again. No
+hot-reload — keeping the build path one direction makes the architecture
+obvious on stage.
 """
-from agents import Agent
-from agents.mcp import MCPServerStdio
-from dotenv import load_dotenv
+
+import os
+from pathlib import Path
+
+from mcp import StdioServerParameters, stdio_client
+from strands import Agent, AgentSkills
+from strands.models.openai import OpenAIModel
+from strands.session.file_session_manager import FileSessionManager
+from strands.tools.mcp import MCPClient
 
 from agent import memory
+from agent.hooks import CustomerIdBindingHook, RefundCapHook
 from agent.identity import AgentIdentity
-from agent.profile import Profile, load_profile
-from agent.skills import list_skills
-from agent.tools import ALL_TOOLS as GOOD_TOOLS
-from agent.tools_bad import ALL_TOOLS as BAD_TOOLS
+from agent.profile import MCPServerConfig, Profile, load_profile
 
-load_dotenv()
+ROOT = Path(__file__).parent.parent
+# Both forms of memory live under one root so the audience can see at a
+# glance that conversation history and episodic notes are the same family:
+#   memory/episodic/customer_<id>.md      — curated, agent-written via remember()
+#   memory/sessions/session_<id>/...      — raw transcript, Strands-managed
+SESSIONS_DIR = ROOT / "memory" / "sessions"
 
 
-def _skill_catalog() -> str:
-    """Build the Anthropic-style skill catalog for the system prompt.
+# ---------------------------------------------------------------------------
+# MCP server construction
+# ---------------------------------------------------------------------------
 
-    Just `name: description` per skill. The agent reads this index to decide
-    which skill applies, then calls `read_skill(name)` to load the full
-    procedure. Full skill bodies don't go in the system prompt — that would
-    bloat the context and hide skill usage from the trace.
 
-    Files starting with underscore (`_TEMPLATE.md`) are skipped — they're
-    templates, not real skills.
+def make_mcp_client(config: MCPServerConfig) -> MCPClient:
+    """Build a Strands MCPClient from a profile entry.
+
+    Env vars inherit the parent's environment so the subprocess has PATH,
+    PYTHONPATH, OPENAI_API_KEY, etc. — plus whatever this config injects.
+
+    The returned client is a `ToolProvider`: pass it directly to
+    `Agent(tools=[...])`. Strands spawns the subprocess on first tool load
+    and stops it when the Agent is finalized — no manual `__enter__` /
+    `__exit__` needed.
     """
-    skills = list_skills()
-    if not skills:
-        return ""
-    lines = [f"- **{s.name}**: {s.description}" for s in skills]
-    return "\n".join(lines)
+    full_env = dict(os.environ)
+    full_env.update(config.env)
+    return MCPClient(
+        lambda: stdio_client(
+            StdioServerParameters(
+                command=config.command,
+                args=list(config.args),
+                env=full_env,
+            )
+        )
+    )
+
+
+# ---------------------------------------------------------------------------
+# System prompt
+# ---------------------------------------------------------------------------
 
 
 def _memory_section(
     enabled: bool,
     customer_id: str | None,
     memory_content: str,
-    writable: bool,
 ) -> str:
-    """Build the Episodic Memory section of the system prompt.
+    """Render the Episodic Memory block.
 
-    Simple pattern: load the customer's memory file FULLY into the prompt
-    (same as Claude Code's CLAUDE.md, GitHub Copilot's instructions file).
-    No retrieval, no on-demand loading — the file is small enough.
+    Loads the customer's memory file FULLY into the prompt (Claude Code /
+    Copilot pattern). The agent updates it via the `remember` /
+    `compact_memory` local tools — registered alongside MCP clients in
+    `build_agent` and only attached when episodic memory is enabled.
 
-    The agent maintains memory via the `remember` and `compact_memory` tools.
+    The protocol (verify pointers via tools, observations shape tone, close
+    the loop with `remember()`) is inlined here rather than expressed as a
+    discoverable skill — when episodic memory is on, this procedure always
+    applies, so it's part of the prompt, not a "decision" the agent makes.
     """
     if not enabled or customer_id is None:
-        return ""  # episodic disabled — no section at all
+        return ""
 
-    if not memory_content:
-        # No prior interactions yet
-        if writable:
-            return (
-                "No prior interactions on file for this customer yet. "
-                "After resolving the current request, use `remember(<concise note>)` "
-                "to start their record."
-            )
-        return "No prior interactions on file for this customer yet."
-
-    # Memory exists — embed it directly, then explain the write tools
-    parts = [memory_content.strip()]
-    if writable:
-        parts.append(
-            "\n---\n"
-            "Use `remember(<concise note>)` after resolving the request to "
-            "record anything a future agent should know. Use `compact_memory("
-            "<rewrite>)` sparingly when memory grows long and rambling — "
-            "you're overwriting, so be careful."
-        )
-    else:
-        parts.append(
-            "\n---\n"
-            "(Read-only in this configuration — you have no tool to update memory.)"
-        )
-    return "\n".join(parts)
-
-
-def _build_instructions(
-    identity: AgentIdentity,
-    skill_catalog: str = "",
-    skills_loadable: bool = True,
-    memory_section: str = "",
-) -> str:
-    parts = [
-        f"You are {identity.name} (agent_id={identity.agent_id}).",
-        "Your job: help customers with order issues efficiently, accurately, and on policy.",
-        "",
-        "## Session context",
-        "Every customer message arrives prefixed with `[verified customer_id=<id>]`. "
-        "That ID is the customer you're speaking with — already authenticated "
-        "through their account session. **Do NOT ask the customer for their ID** "
-        "— you already have it. Use it directly in your tool calls "
-        "(`lookup_customer`, `escalate_to_human`, etc.).",
-        "",
-        "## Your authority",
-        f"- You can issue refunds up to ${identity.refund_cap_usd:.2f}.",
-        "- Refunds ABOVE your cap MUST be escalated via `escalate_to_human`. "
-        "Do NOT split into smaller refunds — that's a policy violation flagged in audit.",
-        "- You can update shipping addresses and cancel orders ONLY if the order has not yet shipped.",
-        "- Always include a reason on writes; it's audit-logged.",
-        "",
-        "## Approach",
-        "1. Look up the customer (using the verified ID from the message prefix) to "
-        "get their profile and tier — useful context for tone and authority.",
-        "2. Look up the order(s) referenced before acting.",
-        "3. Check policy via `search_policy_kb` BEFORE compensating actions "
-        "(refunds, credits). Don't memorize rules — they change.",
-        "4. If a tool returns an error, READ it. A `policy_violation` (code 403) is "
-        "permanent — do NOT retry; escalate. A transient error (network, timeout) "
-        "is worth one retry.",
-        "5. If unsure or the situation feels adversarial, escalate with priority `high`.",
-        "",
-        "## Style",
-        "Friendly, concise English. Acknowledge the customer's frustration when relevant. "
-        "Cite policy by name once. Don't explain your tool calls.",
-    ]
-    if skill_catalog:
-        parts.append("\n## Skills available")
-        if skills_loadable:
-            parts.append(
-                "When a customer's request matches a skill's description below, "
-                "call `read_skill(<name>)` to load the full procedure, then follow "
-                "it step by step. The descriptions tell you when each skill applies; "
-                "the full procedure comes from `read_skill`.\n"
-            )
-        else:
-            parts.append(
-                "Note: these skills describe how a well-equipped agent would handle "
-                "common situations. You do not have a tool to load their procedures "
-                "in this configuration — you'll have to improvise with the tools you "
-                "have. Escalate if you're unsure.\n"
-            )
-        parts.append(skill_catalog)
-    if memory_section:
-        parts.append("\n## Episodic memory\n\n" + memory_section)
-    return "\n".join(parts)
-
-
-def _build_identity(profile: Profile) -> AgentIdentity:
-    """Construct the scoped AgentIdentity from the YAML profile."""
-    return AgentIdentity(
-        agent_id=profile.agent_id,
-        name=profile.name,
-        refund_cap_usd=profile.refund_cap_usd,
-        allowed_tools={
-            "lookup_customer",
-            "get_order",
-            "get_customer_orders",
-            "search_policy_kb",
-            "update_shipping_address",
-            "cancel_order",
-            "issue_refund",
-            "escalate_to_human",
-        },
+    body = (
+        memory_content.strip()
+        if memory_content
+        else "No prior interactions on file for this customer yet."
     )
 
+    protocol = (
+        "**Protocol for using the memory above:**\n\n"
+        "1. **Treat entries as pointers, not data.** For every concrete "
+        "claim in the notes — a ticket ID, refund ref, order ID, amount — "
+        "verify the current state via the matching read tool "
+        "(`get_open_tickets`, `get_refund_history`, `get_order`, "
+        "`lookup_customer`) BEFORE letting it influence an action. Memory "
+        "may be stale; the audit ledger and APIs are the source of truth.\n"
+        "2. **Use observations to shape tone, never numbers.** "
+        '"Repeat customer, second damaged delivery" is fine for phrasing; '
+        '"$58 already refunded" requires verifying the ledger first.\n'
+        "3. **Close the loop on every non-trivial interaction.** Call "
+        '`remember(customer_id="", note=<short note>)` at the end. **Write '
+        "a note small enough to fit on a sticky.** Record what tools "
+        "*cannot* tell the next agent: tone, patterns, open promises, "
+        "pointers to verify next time. Strip everything an API call would "
+        "return.\n\n"
+        "**Concrete example — Alice complains her order #1234 is late, "
+        "you issue a $10 shipping_delay credit.**\n\n"
+        "  ❌ BAD (re-documents data the audit ledger already holds):\n"
+        "  > Customer reported order #1234 late. Verified order is "
+        "in_transit_delayed with DHL, 4 business days late. No prior "
+        "refunds on file. Issued $10 shipping_delay_credit per policy with "
+        "ref recorded in ledger. Set expectation to keep tracking; will "
+        "follow up if not delivered soon.\n\n"
+        "  ✅ GOOD (only what tools cannot fetch):\n"
+        "  > #1234 first delay complaint. Told her 1–2 more days. "
+        "Tone: reasonable.\n\n"
+        "Every fact in the BAD note is verifiable via `get_order` / "
+        "`get_refund_history` / `search_policy_kb`; the next agent will "
+        "fetch them anyway. The GOOD note captures only the promise made "
+        "and the tone — the two things tools can't surface. Procedural "
+        'follow-up instructions ("if she follows up, trace + escalate per '
+        "policy\") do NOT belong here either — that's policy recap, and "
+        "`handle-refund` + `search_policy_kb` already cover it."
+    )
 
-def make_policy_kb_server() -> MCPServerStdio:
-    """Construct (but do not connect) the policy-KB MCP server.
+    return f"{body}\n\n---\n{protocol}"
 
-    The agent calls `search_policy_kb` as if it were a native tool; under
-    the hood the OpenAI Agents SDK forwards to this subprocess, which reads
-    `policies/*.md` and returns matches.
 
-    Caller is responsible for the lifecycle:
-        async with make_policy_kb_server() as mcp:
-            agent, identity = build_agent(mcp_servers=[mcp])
+def _build_instructions(profile: Profile, memory_section: str = "") -> str:
+    """Render the system prompt from `profile.system_prompt`.
+
+    Every field of the loaded profile is available as a placeholder —
+    add a field to YAML and it's automatically referenceable as `{name}`,
+    `{agent_id}`, `{refund_cap_usd}`, `{model}`, etc. The episodic memory
+    block is the only part that stays in Python because the customer's
+    memory file is loaded per-build.
     """
-    return MCPServerStdio(
-        name="policy_kb",
-        params={
-            "command": "python",
-            "args": ["-m", "mcp_server.server"],
-        },
-    )
+    base = profile.system_prompt.format(**vars(profile))
+    if memory_section:
+        base += "\n\n## Episodic memory\n\n" + memory_section
+
+    if profile.skills_dir:
+        base += "\n\n## Available skills\n\n"
+    return base
+
+
+# ---------------------------------------------------------------------------
+# Build the agent
+# ---------------------------------------------------------------------------
+
+
+def _resolve_skills_dir(profile: Profile) -> Path | None:
+    if not profile.skills_dir:
+        return None
+    path = Path(profile.skills_dir)
+    if not path.is_absolute():
+        path = ROOT / path
+    return path if path.exists() else None
 
 
 def build_agent(
     profile: Profile | None = None,
     customer_id: str | None = None,
-    mcp_servers: list | None = None,
 ) -> tuple[Agent, AgentIdentity]:
-    """Build the customer support agent from the YAML profile.
+    """Build the customer support agent.
+
+    One Agent per REPL run; the YAML is read once at construct time.
+    Editing YAML or skills/ on disk has no effect until the next launch.
 
     Args:
-        profile: a loaded Profile. If None, reads agent-profile.yaml.
-        customer_id: optional. If set AND `profile.memory.episodic` is True,
-                     the customer's episodic memory is injected into the
-                     system prompt at build time.
-        mcp_servers: pre-connected MCP servers to attach. If None, a fresh
-                     (un-connected) policy_kb server is created — useful only
-                     when the caller wraps the agent in `async with`.
-
-    Returns:
-        (Agent, AgentIdentity) — the Agent for `Runner.run_streamed(...)` and
-        the AgentIdentity for the `Deps` object the tools see.
+        profile: loaded Profile (defaults to agent-profile.yaml).
+        customer_id: needed when memory.episodic is True (to load the
+            right customer's memory file) and when memory.conversation
+            is True (used as the SessionManager session_id).
     """
     if profile is None:
         profile = load_profile()
 
-    identity = _build_identity(profile)
+    identity = AgentIdentity(
+        agent_id=profile.agent_id,
+        name=profile.name,
+        refund_cap_usd=profile.refund_cap_usd,
+    )
 
-    # Build the skill catalog (just name+description; full procedures load on
-    # demand via the `read_skill` tool — Anthropic's skills pattern).
-    skill_catalog = _skill_catalog()
-
-    # Whether the agent can actually call read_skill / recall_customer_memory /
-    # remember. Tied to the tool set: `good` has them, `bad` doesn't — so the
-    # bad-tools agent sees the catalogs but can't load anything. Part of the
-    # §2 contrast.
-    capable_tools = profile.tool_set == "good"
-
-    # Episodic memory — load the full file into the prompt when enabled.
-    # Same pattern as Claude Code's CLAUDE.md. The agent has `remember` and
-    # `compact_memory` tools to update it.
-    customer_memory = ""
-    if profile.memory.episodic and customer_id:
-        customer_memory = memory.load(customer_id)
-
+    # --- Episodic memory: load the customer's memory file into the prompt ---
+    customer_memory = (
+        memory.load(customer_id) if profile.memory.episodic and customer_id else ""
+    )
     memory_section = _memory_section(
         enabled=profile.memory.episodic,
         customer_id=customer_id,
         memory_content=customer_memory,
-        writable=capable_tools,
     )
 
-    tools = GOOD_TOOLS if profile.tool_set == "good" else BAD_TOOLS
+    # --- Tools: every MCP server in the YAML, passed as ToolProviders.
+    # Strands handles subprocess lifecycle — see make_mcp_client docstring.
+    mcp_clients = [make_mcp_client(cfg) for cfg in profile.mcp_servers]
 
-    if mcp_servers is None:
-        mcp_servers = [make_policy_kb_server()]
+    # --- Local tools: episodic memory writes. Live in-process with the agent
+    # because they're session-scoped state the agent owns end-to-end — no
+    # team / deployment boundary to cross (README §2b's "tools that stay
+    # local" rule). Only attached when episodic memory is enabled, so the
+    # tool catalog matches what's documented in the system prompt.
+    local_tools: list = []
+    if profile.memory.episodic:
+        local_tools.extend([memory.remember, memory.compact_memory])
+
+    # --- Skills: AgentSkills plugin auto-discovers SKILL.md under skills_dir,
+    # injects the catalog into the system prompt, and registers a `skills`
+    # loader tool the agent calls to read a skill body on demand.
+    plugins: list = []
+    skills_dir = _resolve_skills_dir(profile)
+    if skills_dir:
+        plugins.append(AgentSkills(skills=[str(skills_dir)]))
+
+    # --- Conversation memory: Strands' FileSessionManager keyed by customer_id.
+    # Two users → two session_ids → two on-disk directories, fully isolated.
+    # Without it `agent.messages` is a per-process list — fine for this single-
+    # user CLI, but a cross-user leak in any multi-tenant deployment.
+    session_manager = None
+    if profile.memory.conversation and customer_id:
+        SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
+        session_manager = FileSessionManager(
+            session_id=customer_id,
+            storage_dir=str(SESSIONS_DIR),
+        )
+
+    # --- Identity binding: the harness, not the LLM, is the principal.
+    # Every customer-scoped tool call has its `customer_id` arg overwritten
+    # with the session's trusted ID. Prompt injection can no longer cross
+    # customer boundaries (OWASP API#1). See agent/hooks.py.
+    hooks_: list = []
+    if customer_id:
+        hooks_.append(CustomerIdBindingHook(customer_id=customer_id))
+    # Enforce the agent's scoped refund authority at the harness, so even a
+    # prompt-injected agent cannot exceed its cap. The v2 MCP server has a
+    # matching server-side check as defense in depth — the hook just makes
+    # sure the bad call never reaches the wire.
+    hooks_.append(RefundCapHook(refund_cap_usd=profile.refund_cap_usd))
 
     agent = Agent(
-        name=identity.name,
-        instructions=_build_instructions(
-            identity,
-            skill_catalog=skill_catalog,
-            skills_loadable=capable_tools,
-            memory_section=memory_section,
-        ),
-        model=profile.model,
-        tools=tools,
-        mcp_servers=mcp_servers,
+        agent_id=profile.agent_id,
+        name=profile.name,
+        description=f"Customer support agent. Refund authority up to ${profile.refund_cap_usd:.2f}.",
+        model=OpenAIModel(model_id=profile.model),
+        system_prompt=_build_instructions(profile, memory_section),
+        tools=[*mcp_clients, *local_tools],
+        plugins=plugins,
+        hooks=hooks_,
+        session_manager=session_manager,
+        # Suppress Strands' default PrintingCallbackHandler — it streams text
+        # chunks straight to stdout (no newlines), which collides with our own
+        # trace rendering in run.py. We collect tokens from stream_async events
+        # ourselves and render the final reply inside a Rich Panel.
+        callback_handler=None,
     )
     return agent, identity

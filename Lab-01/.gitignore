@@ -9,8 +9,14 @@ venv/
 # Runtime mock state (seeded from mocks/seeds/ on first run; reset with `python reset.py`)
 mocks/data/*.json
 
-# Runtime customer memory (Bob's is committed as the seed)
-memory/customer_*.md
-!memory/customer_cust_002.md
+# Runtime episodic memory (one .md per customer; Bob's is committed as the seed)
+memory/episodic/customer_*.md
+!memory/episodic/customer_cust_002.md
+
+# Runtime conversation memory (Strands FileSessionManager — per-customer chat history)
+memory/sessions/
+
+# REPL line-edit history
+.repl_history
 
 *.swp

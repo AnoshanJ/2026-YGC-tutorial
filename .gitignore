@@ -14,3 +14,5 @@ memory/customer_*.md
 !memory/customer_cust_002.md
 
 *.swp
+
+.ruff*

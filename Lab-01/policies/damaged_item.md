@@ -19,8 +19,8 @@ photo arrives. The label costs us nothing; the trust signal is significant.
    tool is available for direct label issuance).
 3. Request a clear photo of the damaged area.
 4. **Do NOT issue refund until photo is in hand.**
-5. Once photo arrives, call `issue_refund` with reason `"damaged_item_full_refund"`
-   or `"damaged_item_partial"` depending on the scope of damage.
+5. Once photo arrives, issue a full refund with reason `"damaged_item_full_refund"`
+   (or `"damaged_item_partial"` depending on the scope of damage).
 
 ## Exceptions / escalations
 

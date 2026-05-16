@@ -1,22 +1,33 @@
 """File-based episodic memory.
 
 Each customer's prior interactions are stored as a markdown file at
-`memory/customer_<id>.md`. When `memory.episodic` is true in agent-profile.yaml,
-the file is loaded fully into the agent's system prompt at session start.
+`memory/episodic/customer_<id>.md` (sibling to `memory/sessions/` which
+Strands' FileSessionManager owns — see `agent/core.py`). When
+`memory.episodic` is true in agent-profile.yaml, the file is loaded fully
+into the agent's system prompt at session start.
 
-Same pattern as Claude Code's `CLAUDE.md`, GitHub Copilot's
+Same pattern as Claude Code's `CLAUDE.md` + `MEMORY.md`, GitHub Copilot's
 `.github/copilot-instructions.md`, ChatGPT's bio. Production agents with
 larger memory volumes swap this for vector retrieval (Mem0, Letta, Zep);
 for one customer's history (a few dozen lines) full-load is the right call.
 
-The agent updates memory via two tools:
-- `remember(note)` — append a new entry (the daily move)
-- `compact_memory(new_content)` — overwrite with a shorter summary (rare)
+Two layers live here:
+- The `load` / `append` / `write` / `clear` helpers — pure file ops, also
+  used by `agent/core.py` to inject memory into the system prompt at build
+  time and by `reset.py` for demo cleanup.
+- The `remember` / `compact_memory` Strands tools — `@tool`-decorated
+  wrappers the agent calls during the loop. They live here (in-process
+  with the agent) rather than in an MCP server because memory is
+  session-scoped state the agent owns end-to-end — there's no team
+  boundary to cross. See README §2b's "tools that stay local" rule.
 """
+
 from datetime import datetime
 from pathlib import Path
 
-MEMORY_DIR = Path(__file__).parent.parent / "memory"
+from strands import tool
+
+MEMORY_DIR = Path(__file__).parent.parent / "memory" / "episodic"
 
 
 def _path(customer_id: str) -> Path:
@@ -25,25 +36,25 @@ def _path(customer_id: str) -> Path:
 
 def load(customer_id: str) -> str:
     """Return the customer's full memory file contents (empty string if none)."""
-    MEMORY_DIR.mkdir(exist_ok=True)
+    MEMORY_DIR.mkdir(parents=True, exist_ok=True)
     p = _path(customer_id)
-    return p.read_text() if p.exists() else ""
+    return p.read_text(encoding="utf-8") if p.exists() else ""
 
 
 def append(customer_id: str, note: str) -> None:
     """Append a timestamped entry to the customer's memory file."""
-    MEMORY_DIR.mkdir(exist_ok=True)
+    MEMORY_DIR.mkdir(parents=True, exist_ok=True)
     p = _path(customer_id)
     timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M")
     entry = f"\n## {timestamp}\n{note}\n"
-    with p.open("a") as f:
+    with p.open("a", encoding="utf-8") as f:
         f.write(entry)
 
 
 def write(customer_id: str, content: str) -> None:
     """Overwrite the customer's memory file (compaction)."""
-    MEMORY_DIR.mkdir(exist_ok=True)
-    _path(customer_id).write_text(content)
+    MEMORY_DIR.mkdir(parents=True, exist_ok=True)
+    _path(customer_id).write_text(content, encoding="utf-8")
 
 
 def clear(customer_id: str) -> None:
@@ -51,3 +62,67 @@ def clear(customer_id: str) -> None:
     p = _path(customer_id)
     if p.exists():
         p.unlink()
+
+
+# ----- Agent-facing tools -------------------------------------------------
+
+
+@tool
+def remember(customer_id: str, note: str) -> dict:
+    """Append a small note to the customer's episodic memory.
+
+    Episodic memory holds **pointers and observations**, NOT data. Anything
+    an API call would return belongs in the API, not here. Memory should be
+    short enough to fit on a sticky note. If your note repeats facts from
+    the audit ledger or orders API, you're doing it wrong.
+
+    Record only what tools CANNOT tell the next agent:
+      - **Open promises** ("Told Bob a replacement would ship by 2026-05-12;
+        track TICKET-1042.")
+      - **Behavioural patterns / tone** ("Second damaged delivery to this
+        address in 6 months — fulfillment-side pattern, not customer-side.")
+      - **Pointers for next time** ("If she follows up on #1234, trace +
+        escalate per policy.")
+
+    Do NOT record:
+      - Refund amounts or refs (the ledger has them; `get_refund_history`)
+      - Ticket IDs as standalone facts (use `get_open_tickets` to verify
+        status — memory may be stale)
+      - Customer tier / tenure / contact (use `lookup_customer`)
+      - Order status / lateness / damage flag (use `get_order`)
+      - Policy citations (use `search_policy_kb`)
+
+    Concrete example — Alice complained #1234 was late; you issued a $10
+    shipping_delay credit.
+
+      ❌ BAD: "Customer reported order #1234 late. Verified order is
+              in_transit_delayed with DHL, 4 business days late. No prior
+              refunds on file. Issued $10 shipping_delay_credit per policy
+              with ref recorded in ledger. Set expectation to keep tracking;
+              will follow up if not delivered soon."
+
+      ✅ GOOD: "#1234 first delay complaint. Told her 1–2 more days.
+               Tone: reasonable."
+
+    The BAD version is ~5x longer and every fact in it is verifiable via
+    a tool call. The GOOD version captures only the promise made and the
+    tone — the two things tools can't surface. Procedural follow-up advice
+    ("if she follows up, trace + escalate per policy") is policy recap and
+    does NOT belong here — `handle-refund` + `search_policy_kb` cover it.
+
+    `customer_id` is bound by the harness; pass an empty string or any
+    placeholder.
+    """
+    append(customer_id, note)
+    return {"ok": True, "saved_for": customer_id}
+
+
+@tool
+def compact_memory(customer_id: str, new_content: str) -> dict:
+    """Rewrite the customer's entire memory file with a compacted version.
+
+    Use ONLY when the existing memory has grown long and rambling. You
+    are OVERWRITING; old content is replaced. Be careful.
+    """
+    write(customer_id, new_content)
+    return {"ok": True, "rewrote": customer_id}

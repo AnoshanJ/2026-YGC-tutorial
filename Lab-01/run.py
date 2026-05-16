@@ -1,12 +1,13 @@
 """Interactive CLI for the customer support agent.
 
-Default: a multi-turn conversation. Type your question, the agent streams its
-tool calls and reply, you type the next question, the agent remembers what
-came before. Exit with `exit` / `quit` / `:q` / Ctrl-C / Ctrl-D.
+Default: a multi-turn conversation. Type your question, the agent runs (and
+streams tool calls), you see a compact one-line trace, then a Markdown
+panel with the reply. Exit with `exit` / `quit` / `:q` / Ctrl-C / Ctrl-D.
 
-Hot-reload: agent-profile.yaml and skills/*.md are watched between turns.
-Edit either while the REPL is running and the agent rebuilds on your next
-message — you'll see "[dim]config reloaded[/dim]". No restart needed.
+The agent is built once per launch — there is no hot-reload. To apply edits
+to `agent-profile.yaml`, `skills/`, or anything else: type `exit`, then
+`python run.py` again. Strands owns every MCP subprocess as a ToolProvider,
+so an `exit` cleanly shuts everything down.
 
 In production, the customer_id comes from the authenticated session (login,
 OIDC token, JWT). For the demo we use `--customer <id>` (default `cust_001`).
@@ -17,26 +18,38 @@ Usage:
   python run.py --customer cust_003              # REPL as Carol (for §4b)
   python run.py "single question"                # one-shot, exits after
 """
+
 import argparse
 import asyncio
 import json
+import logging
 import sys
 from pathlib import Path
 
-from agents import Runner
+from dotenv import load_dotenv
 from prompt_toolkit import PromptSession
 from prompt_toolkit.formatted_text import HTML
 from prompt_toolkit.history import FileHistory
-from rich.console import Console
+from rich.console import Console, Group
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.rule import Rule
 from rich.status import Status
+from rich.table import Table
+from rich.text import Text
 
-from agent.core import build_agent, make_policy_kb_server
-from agent.profile import PROFILE_PATH, load_profile
-from agent.tools import Deps
+from agent.core import build_agent
+from agent.profile import load_profile
 from mocks.client import CustomerSupportClient
+
+# Load .env into os.environ before the OpenAI client is constructed and
+# before any MCP subprocess is spawned (make_mcp_client inherits os.environ),
+# so OPENAI_API_KEY etc. are visible at runtime.
+load_dotenv(Path(__file__).parent / ".env")
+
+# Strands' AgentSkills plugin can warn on prompt re-injection in edge cases —
+# harmless in our flow but noisy on stage. Silence it.
+logging.getLogger("strands.vended_plugins.skills.agent_skills").setLevel(logging.ERROR)
 
 ROOT = Path(__file__).parent
 SKILLS_DIR = ROOT / "skills"
@@ -44,23 +57,39 @@ SKILLS_DIR = ROOT / "skills"
 console = Console()
 
 EXIT_TOKENS = {"exit", "quit", "/exit", "/quit", ":q", "bye"}
-HISTORY_FILE = str(Path.home() / ".lab1_history")
+HISTORY_FILE = str(ROOT / ".repl_history")
 
 
 # ---------------------------------------------------------------------------
-# Framing & rendering (unchanged from previous run.py)
+# Framing
 # ---------------------------------------------------------------------------
 
 
-def frame(customer_id: str, message: str) -> str:
-    """Prepend the verified session context. The agent's system prompt
-    explains this prefix — already authenticated through their session."""
-    return f"[verified customer_id={customer_id}] {message}"
+def frame(_customer_id: str, message: str) -> str:
+    """Pass the user message through unchanged.
+
+    The customer's identity is bound at the harness layer via
+    `agent.hooks.CustomerIdBindingHook` — it never appears in text the LLM
+    can read. The model has no syntactic handle on the customer_id and
+    cannot manipulate it via prompt injection. If a tool needs the ID, the
+    hook injects the trusted value into the tool call's input dict just
+    before dispatch."""
+    return message
+
+
+# ---------------------------------------------------------------------------
+# Trace rendering (compact one-liner per tool call)
+# ---------------------------------------------------------------------------
+
+
+def _truncate(text, n: int = 50) -> str:
+    s = str(text) if text is not None else ""
+    return s if len(s) <= n else s[: n - 1] + "…"
 
 
 def _parse(obj):
-    """Best-effort: return obj as a Python object (parses JSON strings)."""
-    if isinstance(obj, (dict, list)):
+    """Return obj as a Python object (parses JSON strings best-effort)."""
+    if isinstance(obj, (dict, list)) or obj is None:
         return obj
     if isinstance(obj, str):
         try:
@@ -70,20 +99,11 @@ def _parse(obj):
     return obj
 
 
-def _truncate(text, n: int = 50) -> str:
-    s = str(text) if text is not None else ""
-    return s if len(s) <= n else s[: n - 1] + "…"
-
-
-# ---------- args summarizers (per-tool, with generic fallback) -------------
-
-
 def _summarize_args(name: str, raw) -> str:
     args = _parse(raw)
     if not isinstance(args, dict):
         return _truncate(args, 60)
 
-    # Per-tool — compact, human-readable
     if name == "lookup_customer":
         return args.get("customer_id", "?")
     if name == "get_order":
@@ -98,38 +118,33 @@ def _summarize_args(name: str, raw) -> str:
         return f'{args.get("order_id", "?")}, "{_truncate(args.get("reason", ""), 30)}"'
     if name == "issue_refund":
         return (
-            f'{args.get("order_id", "?")}, '
-            f'${args.get("amount_usd", "?")}, '
+            f"{args.get('order_id', '?')}, "
+            f"${args.get('amount_usd', '?')}, "
             f'"{_truncate(args.get("reason", ""), 30)}"'
         )
     if name == "escalate_to_human":
         return (
-            f'priority={args.get("priority", "normal")}, '
+            f"priority={args.get('priority', 'normal')}, "
             f'"{_truncate(args.get("reason", ""), 40)}"'
         )
     if name == "remember":
         return f'"{_truncate(args.get("note", ""), 50)}"'
     if name == "compact_memory":
-        return f'<rewrite, {len(args.get("new_content", ""))} chars>'
-    if name == "read_skill":
+        return f"<rewrite, {len(args.get('new_content', ''))} chars>"
+    if name == "skills":  # AgentSkills plugin's loader tool
         return args.get("skill_name", "?")
 
-    # Bad-tool fallback — args is usually a string blob
+    # Bad-tool fallback: single string arg
     if "args" in args and len(args) == 1:
         return _truncate(args["args"], 50)
 
-    # Generic — k=v pairs, truncated
     return ", ".join(f"{k}={_truncate(v, 25)}" for k, v in args.items())
-
-
-# ---------- result summarizers -----------------------------------------
 
 
 def _summarize_result(name: str, raw):
     """Returns (text, is_error)."""
     result = _parse(raw)
 
-    # Generic error first (uniform contract from our tools)
     if isinstance(result, dict) and "error" in result:
         code = result.get("code")
         detail = result.get("detail") or result.get("error")
@@ -142,11 +157,10 @@ def _summarize_result(name: str, raw):
             bits.append(f"→ {remediation}")
         return "err: " + " ".join(bits), True
 
-    # Per-tool — readable summary
     if name == "lookup_customer" and isinstance(result, dict):
         return (
-            f'{result.get("name", "?")}, {result.get("tier", "?")}, '
-            f'{result.get("lifetime_orders", "?")} orders',
+            f"{result.get('name', '?')}, {result.get('tier', '?')}, "
+            f"{result.get('lifetime_orders', '?')} orders",
             False,
         )
     if name == "get_order" and isinstance(result, dict):
@@ -161,42 +175,45 @@ def _summarize_result(name: str, raw):
         return f"{n} orders", False
     if name == "issue_refund" and isinstance(result, dict):
         return (
-            f'ok {result.get("ref", "")}, ${result.get("amount_usd", "?")}',
+            f"ok {result.get('ref', '')}, ${result.get('amount_usd', '?')}",
             False,
         )
     if name == "escalate_to_human" and isinstance(result, dict):
         return (
-            f'ok {result.get("ticket_id", "")} (priority {result.get("priority", "normal")})',
+            f"ok {result.get('ticket_id', '')} (priority {result.get('priority', 'normal')})",
             False,
         )
     if name in {"update_shipping_address", "cancel_order"} and isinstance(result, dict):
-        return f'ok {result.get("ref", "")}', False
+        return f"ok {result.get('ref', '')}", False
     if name in {"remember", "compact_memory"} and isinstance(result, dict):
         return "ok", False
-    if name == "read_skill" and isinstance(result, dict):
-        if "procedure" in result:
-            return (
-                f'{result.get("name", "?")} loaded ({len(result["procedure"])} chars)',
-                False,
+    if name == "skills":
+        # AgentSkills returns the skill body as a string (or dict with content).
+        if isinstance(result, str):
+            return f"skill loaded ({len(result)} chars)", False
+        if isinstance(result, dict):
+            body = (
+                result.get("instructions")
+                or result.get("body")
+                or result.get("content")
             )
+            if body:
+                return f"skill loaded ({len(body)} chars)", False
         return _truncate(result, 60), False
 
-    # MCP results — list of policy hits
     if isinstance(result, list):
         if not result:
             return "(empty)", False
         first = result[0]
         if isinstance(first, dict):
             label = first.get("id") or first.get("title") or first.get("name") or "?"
-            extra = f" (+{len(result)-1} more)" if len(result) > 1 else ""
+            extra = f" (+{len(result) - 1} more)" if len(result) > 1 else ""
             return f"{label}{extra}", False
         return f"[{len(result)} items]", False
 
-    # Bad-tool string results
     if isinstance(result, str):
         return _truncate(result, 70), False
 
-    # Generic dict fallback
     if isinstance(result, dict):
         if result.get("ok"):
             ref = result.get("ref") or result.get("ticket_id") or ""
@@ -206,174 +223,269 @@ def _summarize_result(name: str, raw):
     return _truncate(result, 70), False
 
 
-# ---------- rendering --------------------------------------------------
-
-
-def _render_call_with_result(step: int, name: str, args, result) -> None:
+def _render_call(name: str, args, result) -> None:
     args_str = _summarize_args(name, args)
     result_str, is_error = _summarize_result(name, result)
     arrow = "[red]✗[/red]" if is_error else "[dim]→[/dim]"
-    result_style = "red" if is_error else ""
-    if result_style:
-        result_str = f"[{result_style}]{result_str}[/{result_style}]"
+    if is_error:
+        result_str = f"[red]{result_str}[/red]"
     console.print(
         f"[yellow]⏵[/yellow] [bold yellow]{name}[/bold yellow]"
         f"([dim]{args_str}[/dim]) {arrow} {result_str}"
     )
 
 
-def _render_reasoning(text: str) -> None:
-    console.print(f"  [dim italic]reasoning:[/dim italic] [dim]{_truncate(text, 200)}[/dim]")
+# ---------------------------------------------------------------------------
+# Strands event handling
+# ---------------------------------------------------------------------------
 
 
-def _call_id_of(raw) -> str | None:
-    """Extract a tool-call id from a ToolCallItem.raw_item or
-    ToolCallOutputItem.raw_item, defensively. The OpenAI Agents SDK uses
-    different field names depending on the call type / version."""
-    for attr in ("call_id", "id", "tool_call_id"):
-        v = getattr(raw, attr, None)
-        if v:
-            return str(v)
-    if isinstance(raw, dict):
-        for attr in ("call_id", "id", "tool_call_id"):
-            if raw.get(attr):
-                return str(raw[attr])
-    return None
+def _extract_tool_use(event: dict):
+    """Pull (id, name, input) out of a Strands stream event if it's a tool-use
+    event. Returns None otherwise. Strands' streaming chunks for tool use
+    typically look like {"current_tool_use": {"name": ..., "input": ..., "toolUseId": ...}}.
+    """
+    tu = event.get("current_tool_use") if isinstance(event, dict) else None
+    if not tu or not tu.get("name"):
+        return None
+    return (
+        tu.get("toolUseId") or tu.get("id") or tu.get("name"),
+        tu["name"],
+        tu.get("input", {}),
+    )
 
 
-async def _stream_events(result) -> None:
-    """Drain stream_events() and render tool calls + results as compact one-liners.
+def _extract_tool_results_from_messages(messages: list) -> dict:
+    """Walk the agent's message history and return a {tool_use_id: result_content}
+    map. Strands stores tool returns as `role=user` (or `role=tool`) messages
+    with `toolResult` content blocks. Defensive across shapes."""
+    out: dict = {}
+    for msg in messages or []:
+        content = msg.get("content") if isinstance(msg, dict) else None
+        if not content:
+            continue
+        if isinstance(content, list):
+            for block in content:
+                if not isinstance(block, dict):
+                    continue
+                tr = block.get("toolResult") or block.get("tool_result")
+                if isinstance(tr, dict):
+                    tu_id = tr.get("toolUseId") or tr.get("tool_use_id") or tr.get("id")
+                    # content might be a string, list of {"text": ...}, or dict
+                    body = tr.get("content")
+                    if isinstance(body, list) and body:
+                        first = body[0]
+                        if isinstance(first, dict):
+                            body = first.get("text") or first.get("json") or first
+                    if tu_id:
+                        out[tu_id] = body
+    return out
 
-    We buffer pending calls in a dict keyed by call_id. When the matching
-    output arrives, we render `tool(args) → result` on a single line.
-    Reasoning items render inline as they arrive (italic dim).
+
+async def _run_turn(agent, message: str) -> str:
+    """Drive one agent turn. Each tool call streams to the trace LIVE.
+
+    We listen for two Strands callback events on `stream_async`:
+      - ModelMessageEvent     (role=assistant) → tool uses with parsed input
+      - ToolResultMessageEvent (role=user)     → tool results
+
+    The mid-stream `current_tool_use` deltas carry input as a partial JSON
+    string that's never re-emitted as a parsed dict, so they're useless
+    for our trace. The two message-events above are emitted right after
+    each model turn / tool batch finishes — they're the live signal.
     """
     status = Status("[dim]agent thinking…[/dim]", spinner="dots", console=console)
     status.start()
     first = True
-    step = 0
-    pending: dict[str, tuple[int, str, object]] = {}
+    # tu_id -> {"name": str, "args": dict, "rendered": bool}
+    pending: dict[str, dict] = {}
+    final_text_parts: list[str] = []
+
+    def _record_tool_use(block: dict) -> None:
+        tu = block.get("toolUse") or block.get("tool_use")
+        if not isinstance(tu, dict):
+            return
+        tu_id = tu.get("toolUseId") or tu.get("id")
+        name = tu.get("name")
+        if not tu_id or not name:
+            return
+        pending[tu_id] = {
+            "name": name,
+            "args": tu.get("input") or {},
+            "rendered": False,
+        }
+
+    def _flush_result(block: dict) -> None:
+        tr = block.get("toolResult") or block.get("tool_result")
+        if not isinstance(tr, dict):
+            return
+        tu_id = tr.get("toolUseId") or tr.get("tool_use_id") or tr.get("id")
+        slot = pending.get(tu_id) if tu_id else None
+        if slot is None or slot["rendered"]:
+            return
+        body = tr.get("content")
+        if isinstance(body, list) and body:
+            head = body[0]
+            if isinstance(head, dict):
+                body = head.get("text") or head.get("json") or head
+        _render_call(slot["name"], slot["args"], body)
+        slot["rendered"] = True
 
     try:
-        async for event in result.stream_events():
-            if event.type != "run_item_stream_event":
-                continue
-
+        async for event in agent.stream_async(message):
             if first:
                 status.stop()
                 first = False
 
-            item = event.item
-            cls = type(item).__name__
+            if not isinstance(event, dict):
+                continue
 
-            if cls == "ToolCallItem":
-                step += 1
-                raw = item.raw_item
-                name = getattr(raw, "name", None)
-                args = getattr(raw, "arguments", None)
-                if name is None and hasattr(raw, "function"):
-                    name = raw.function.name
-                    args = raw.function.arguments
-                call_id = _call_id_of(raw) or f"_step_{step}"
-                pending[call_id] = (step, name or cls, args or "{}")
+            # Final reply streams as text deltas — collect for the Markdown panel
+            data = event.get("data")
+            if isinstance(data, str):
+                final_text_parts.append(data)
 
-            elif cls == "ToolCallOutputItem":
-                call_id = _call_id_of(item.raw_item) or _call_id_of(item)
-                if call_id and call_id in pending:
-                    s, name, args = pending.pop(call_id)
-                else:
-                    # Orphan output — render what we can
-                    s, name, args = step, "?", ""
-                _render_call_with_result(s, name, args, item.output)
-
-            elif cls == "ReasoningItem":
-                text = getattr(item, "content", None)
-                if not text:
-                    raw = getattr(item, "raw_item", None)
-                    if raw is not None:
-                        text = getattr(raw, "content", None) or getattr(raw, "summary", None)
-                if text:
-                    _render_reasoning(text if isinstance(text, str) else json.dumps(text))
+            # ModelMessageEvent / ToolResultMessageEvent both expose `message`
+            msg = event.get("message")
+            if not isinstance(msg, dict):
+                continue
+            content = msg.get("content")
+            if not isinstance(content, list):
+                continue
+            role = msg.get("role")
+            for block in content:
+                if not isinstance(block, dict):
+                    continue
+                if role == "assistant":
+                    _record_tool_use(block)
+                elif role == "user":
+                    _flush_result(block)
     finally:
         if first:
             status.stop()
 
+    # Catch-all: render any tool whose result didn't come through as an event
+    # (shouldn't happen with the message-events above, but the audit shouldn't
+    # silently drop calls).
+    messages = getattr(agent, "messages", []) or []
+    results_by_id = _extract_tool_results_from_messages(messages)
+    for tu_id, slot in pending.items():
+        if slot["rendered"]:
+            continue
+        _render_call(
+            slot["name"],
+            slot["args"],
+            results_by_id.get(tu_id, "(no result captured)"),
+        )
+        slot["rendered"] = True
+
+    # Final reply: prefer streamed text; fall back to last assistant message
+    final_reply = "".join(final_text_parts).strip()
+    if not final_reply and messages:
+        for msg in reversed(messages):
+            if not isinstance(msg, dict) or msg.get("role") != "assistant":
+                continue
+            content = msg.get("content")
+            if isinstance(content, str):
+                final_reply = content
+                break
+            if isinstance(content, list):
+                for block in content:
+                    if isinstance(block, dict):
+                        text = block.get("text")
+                        if text:
+                            final_reply = text
+                            break
+                if final_reply:
+                    break
+
+    return final_reply or "(no reply)"
+
 
 # ---------------------------------------------------------------------------
-# Hot-reload tracking
+# Banner + prompt
 # ---------------------------------------------------------------------------
 
 
-def _config_mtime() -> float:
-    """Latest mtime across agent-profile.yaml and every skill file.
+def _flag(on: bool) -> Text:
+    return Text("● on", style="bold green") if on else Text("○ off", style="dim")
 
-    If anything in this set is touched between turns, we rebuild the agent
-    so the change takes effect immediately (no restart).
-    """
-    paths: list[Path] = [PROFILE_PATH]
-    if SKILLS_DIR.exists():
-        paths.extend(p for p in SKILLS_DIR.iterdir() if p.is_file())
-    return max(
-        (p.stat().st_mtime for p in paths if p.exists()),
-        default=0.0,
+
+def _discover_skills(skills_dir: Path = SKILLS_DIR) -> list[str]:
+    """Return the names of skills the agent will load — every subdirectory
+    of skills_dir that contains a SKILL.md. Names match the directory name
+    (Strands convention: lowercase + hyphens). Same surface area as the
+    AgentSkills plugin auto-discovery in `agent/core.py`."""
+    if not skills_dir.exists():
+        return []
+    return sorted(
+        p.name for p in skills_dir.iterdir() if p.is_dir() and (p / "SKILL.md").exists()
     )
-
-
-# ---------------------------------------------------------------------------
-# Conversation loop
-# ---------------------------------------------------------------------------
-
-
-async def _process_turn(
-    agent,
-    deps,
-    conversation: list[dict],
-    customer_id: str,
-    user_msg: str,
-) -> list[dict]:
-    """Run one turn end-to-end. Returns the updated conversation list."""
-    conversation.append({"role": "user", "content": frame(customer_id, user_msg)})
-
-    try:
-        result = Runner.run_streamed(agent, conversation, context=deps)
-        await _stream_events(result)
-        final = result.final_output
-        new_conversation = result.to_input_list()
-    except Exception as e:
-        console.print(f"[red]✗ agent error: {type(e).__name__}: {e}[/red]\n")
-        conversation.pop()  # roll back so the conversation stays clean
-        return conversation
-
-    console.print(Panel(
-        Markdown(str(final) if final is not None else "_(no reply)_"),
-        title="[green]agent[/green]",
-        border_style="green",
-        padding=(0, 1),
-    ))
-    console.print()
-
-    return new_conversation
 
 
 def _banner(
     client: CustomerSupportClient,
     customer_id: str,
-    tool_set: str,
+    mcp_names: list[str],
+    conversation: bool,
     episodic: bool,
 ) -> None:
+    """Startup banner — a panel with a key/value layout so wide-terminal
+    rendering doesn't truncate and the demo state pops at a glance."""
     customer = client.get_customer(customer_id)
     name = customer.name if customer else customer_id
     tier = customer.tier if customer else "?"
+
+    grid = Table.grid(padding=(0, 1), expand=False)
+    grid.add_column(style="dim", justify="right", no_wrap=True)
+    grid.add_column()
+
+    grid.add_row(
+        "session",
+        Text.assemble(
+            (name, "bold"),
+            (f"  ({customer_id} · {tier} tier)", "dim"),
+        ),
+    )
+    mcps = ", ".join(mcp_names) if mcp_names else "(none)"
+    grid.add_row("mcps", Text(mcps, style="yellow"))
+    skills = _discover_skills()
+    skills_str = ", ".join(skills) if skills else "(none)"
+    grid.add_row("skills", Text(skills_str, style="magenta"))
+    grid.add_row(
+        "memory",
+        Text.assemble(
+            ("conversation ", ""),
+            _flag(conversation),
+            ("    episodic ", ""),
+            _flag(episodic),
+        ),
+    )
+
+    hint = Text.assemble(
+        ("exit", "bold"),
+        (" / Ctrl-D to quit  ·  ", "dim"),
+        ("↑/↓", "bold"),
+        (" history  ·  edit ", "dim"),
+        ("agent-profile.yaml", "bold"),
+        (" or ", "dim"),
+        ("skills/", "bold"),
+        (" then ", "dim"),
+        ("exit", "bold"),
+        (" + ", "dim"),
+        ("python run.py", "bold"),
+        (" to apply", "dim"),
+    )
+
     console.print()
-    console.print(Rule(
-        f"[bold]Customer Support Agent[/bold] · "
-        f"tools=[yellow]{tool_set}[/yellow] · "
-        f"episodic_memory={'[green]on[/green]' if episodic else '[dim]off[/dim]'}"
-    ))
     console.print(
-        f"[dim]session: {name} ({customer_id}, {tier}-tier) · "
-        f"type [bold]exit[/bold] / Ctrl-D to quit · ↑/↓ for history · "
-        f"edit agent-profile.yaml or skills/ to hot-reload[/dim]"
+        Panel(
+            Group(grid, Text(""), hint),
+            title="[bold]Customer Support Agent[/bold]",
+            title_align="left",
+            border_style="cyan",
+            padding=(0, 1),
+        )
     )
     console.print()
 
@@ -382,80 +494,96 @@ def _build_prompt_session() -> PromptSession:
     return PromptSession(history=FileHistory(HISTORY_FILE))
 
 
-def _make_deps(identity, client: CustomerSupportClient, customer_id: str) -> Deps:
-    return Deps(identity=identity, client=client, current_customer_id=customer_id)
+# ---------------------------------------------------------------------------
+# Run loops
+# ---------------------------------------------------------------------------
+
+
+async def _process_turn(agent, customer_id: str, user_msg: str) -> None:
+    framed = frame(customer_id, user_msg)
+    try:
+        final = await _run_turn(agent, framed)
+    except Exception as e:
+        console.print(f"[red]✗ agent error: {type(e).__name__}: {e}[/red]\n")
+        return
+
+    console.print(
+        Panel(
+            Markdown(final),
+            title="[green]agent[/green]",
+            border_style="green",
+            padding=(0, 1),
+        )
+    )
+    console.print()
 
 
 async def _repl(customer_id: str) -> None:
     profile = load_profile()
-    client = CustomerSupportClient()
-    mcp = make_policy_kb_server()
-    async with mcp:
-        agent, identity = build_agent(
-            profile=profile, customer_id=customer_id, mcp_servers=[mcp]
-        )
-        deps = _make_deps(identity, client, customer_id)
-        session = _build_prompt_session()
-        conversation: list[dict] = []
-        last_mtime = _config_mtime()
+    display_client = CustomerSupportClient()  # for banner / customer name lookup
 
-        _banner(client, customer_id, profile.tool_set, profile.memory.episodic)
+    agent, _identity = build_agent(profile=profile, customer_id=customer_id)
+    session = _build_prompt_session()
 
-        while True:
-            try:
-                user_msg = await session.prompt_async(
-                    HTML("<ansicyan><b>you ›</b></ansicyan> ")
-                )
-            except (EOFError, KeyboardInterrupt):
-                console.print("\n[dim]bye[/dim]\n")
-                return
+    _banner(
+        display_client,
+        customer_id,
+        [s.name for s in profile.mcp_servers],
+        profile.memory.conversation,
+        profile.memory.episodic,
+    )
 
-            user_msg = (user_msg or "").strip()
-            if not user_msg:
-                continue
-            if user_msg.lower() in EXIT_TOKENS:
-                console.print("[dim]bye[/dim]\n")
-                return
+    while True:
+        try:
+            user_msg = await session.prompt_async(
+                HTML("<ansicyan><b>you ›</b></ansicyan> ")
+            )
+        except (EOFError, KeyboardInterrupt):
+            console.print("\n[dim]bye[/dim]\n")
+            return
 
-            # Hot-reload: rebuild agent if config or skills changed
-            current_mtime = _config_mtime()
-            if current_mtime != last_mtime:
-                profile = load_profile()
-                agent, identity = build_agent(
-                    profile=profile, customer_id=customer_id, mcp_servers=[mcp]
-                )
-                deps = _make_deps(identity, client, customer_id)
-                last_mtime = current_mtime
-                console.print(
-                    f"[dim]✓ config reloaded · tools=[yellow]{profile.tool_set}[/yellow] · "
-                    f"episodic={'on' if profile.memory.episodic else 'off'}[/dim]\n"
-                )
+        user_msg = (user_msg or "").strip()
+        if not user_msg:
+            continue
+        if user_msg.lower() in EXIT_TOKENS:
+            console.print("[dim]bye[/dim]\n")
+            return
 
-            conversation = await _process_turn(agent, deps, conversation, customer_id, user_msg)
-            console.print(Rule(style="dim"))
+        await _process_turn(agent, customer_id, user_msg)
+
+        # Conversation memory off → agent forgets between turns. With it on,
+        # FileSessionManager has already persisted this turn to disk.
+        if not profile.memory.conversation:
+            agent.messages.clear()
+
+        console.print(Rule(style="dim"))
 
 
 async def _one_shot(customer_id: str, message: str) -> None:
     profile = load_profile()
-    client = CustomerSupportClient()
-    mcp = make_policy_kb_server()
-    async with mcp:
-        agent, identity = build_agent(
-            profile=profile, customer_id=customer_id, mcp_servers=[mcp]
-        )
-        deps = _make_deps(identity, client, customer_id)
+    display_client = CustomerSupportClient()
 
-        _banner(client, customer_id, profile.tool_set, profile.memory.episodic)
-        customer = client.get_customer(customer_id)
-        label = customer.name if customer else customer_id
-        console.print(Panel(
+    agent, _identity = build_agent(profile=profile, customer_id=customer_id)
+
+    _banner(
+        display_client,
+        customer_id,
+        [s.name for s in profile.mcp_servers],
+        profile.memory.conversation,
+        profile.memory.episodic,
+    )
+    customer = display_client.get_customer(customer_id)
+    label = customer.name if customer else customer_id
+    console.print(
+        Panel(
             message,
             title=f"[cyan]you · {label}[/cyan]",
             border_style="cyan",
             padding=(0, 1),
-        ))
-        console.print()
-        await _process_turn(agent, deps, [], customer_id, message)
+        )
+    )
+    console.print()
+    await _process_turn(agent, customer_id, message)
 
 
 # ---------------------------------------------------------------------------
@@ -472,7 +600,7 @@ def main() -> None:
         "--customer",
         default="cust_001",
         help="Customer ID for the verified session (default: cust_001 / Alice). "
-             "Also: cust_002 (Bob, §3), cust_003 (Carol, §4b business tier).",
+        "Also: cust_002 (Bob, §3), cust_003 (Carol, §4b business tier).",
     )
     parser.add_argument(
         "message",

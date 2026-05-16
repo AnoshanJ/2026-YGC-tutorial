@@ -12,21 +12,21 @@ and the customer must use the carrier's redirect service directly.
 
 ## Agent action
 
-1. Call `get_order` — check the `status` field.
-2. **If status is `placed` or `preparing`:** call `update_shipping_address`
-   with the new address. Confirm the new address in the reply.
+1. Look up the order — check the `status` field.
+2. **If status is `placed` or `preparing`:** update the shipping address.
+   Confirm the new address in the reply.
 3. **If status is anything else** (`in_transit_delayed`, `in_transit`,
-   `delivered`, `delivered_damaged`): do NOT call `update_shipping_address`.
-   The tool will return `{"error": "order_already_shipped",
-   "remediation": "redirect_to_carrier"}`. Instead, politely explain the
-   constraint and direct the customer to the carrier's redirect service
-   (typically a link on the tracking page).
+   `delivered`, `delivered_damaged`): do NOT attempt the update — the
+   backend will reject with `order_already_shipped` and a `remediation` of
+   `redirect_to_carrier`. Politely explain the constraint and direct the
+   customer to the carrier's redirect service (typically a link on the
+   tracking page).
 
 ## Anti-pattern
 
-Calling `update_shipping_address` blindly without first checking status. The
-tool will reject, you'll waste a turn, and the customer sees you fumble.
-Always `get_order` first.
+Attempting an address update blindly without first checking status. The
+backend will reject, you'll waste a turn, and the customer sees you fumble.
+Always look up the order first.
 
 ## Exceptions
 

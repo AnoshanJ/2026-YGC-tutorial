@@ -1,15 +1,18 @@
 """Local MCP server exposing the company policy KB.
 
-Runs as a subprocess of the agent (via `MCPServerStdio` in agent/core.py).
-The agent calls `search_policy_kb(query)` like a native tool; under the hood,
-this server reads `policies/*.md` and returns the matching ones.
+Runs as a subprocess of the agent (launched via Strands' MCPClient from
+agent/core.py). The agent calls `search_policy_kb(query)` like a native
+tool; under the hood, this server reads `policies/*.md` and returns the
+matching ones.
 
-In production this would be a hosted service owned by the policy / compliance
-team. The agent team never edits policy content — they just call the MCP tool.
+In production this would be a hosted service owned by the policy /
+compliance team. The agent team never edits policy content — they just
+call the MCP tool.
 
 To run standalone (for debugging):
-    python -m mcp_server.server
+    python -m mcp_servers.policy_kb
 """
+
 import logging
 import re
 from pathlib import Path
@@ -24,8 +27,8 @@ from mcp.server.fastmcp import FastMCP  # noqa: E402  — after logging config
 
 mcp = FastMCP("policy-kb")
 
-# policies/ sits at the repo root, next to agent/ and mcp_server/
-POLICIES_DIR = Path(__file__).parent.parent / "policies"
+# policies/ sits at the repo root, next to agent/ and mcp_servers/
+POLICIES_DIR = Path(__file__).parent.parent.parent / "policies"
 
 
 def _parse_policy(path: Path) -> dict:
@@ -66,7 +69,9 @@ def _parse_policy(path: Path) -> dict:
     return {
         "id": fm.get("id", path.stem),
         "title": fm.get("title", path.stem),
-        "keywords": fm.get("keywords", []) if isinstance(fm.get("keywords"), list) else [],
+        "keywords": fm.get("keywords", [])
+        if isinstance(fm.get("keywords"), list)
+        else [],
         "rule": body.strip(),
         "full_text": text.strip(),
     }
@@ -112,16 +117,18 @@ def search_policy_kb(query: str) -> list[dict]:
     matches.sort(key=lambda x: x[0], reverse=True)
 
     if not matches:
-        return [{
-            "id": "no_match",
-            "title": "No matching policy",
-            "rule": (
-                "No policy in the knowledge base matched this query. "
-                "If unsure how to proceed, escalate to a human via "
-                "escalate_to_human."
-            ),
-            "relevance": 0,
-        }]
+        return [
+            {
+                "id": "no_match",
+                "title": "No matching policy",
+                "rule": (
+                    "No policy in the knowledge base matched this query. "
+                    "If unsure how to proceed, escalate to a human via "
+                    "escalate_to_human."
+                ),
+                "relevance": 0,
+            }
+        ]
 
     return [
         {
@@ -135,5 +142,5 @@ def search_policy_kb(query: str) -> list[dict]:
 
 
 if __name__ == "__main__":
-    # Stdio transport — what the agent connects to via MCPServerStdio
+    # Stdio transport — what the agent connects to via Strands' MCPClient
     mcp.run(transport="stdio")

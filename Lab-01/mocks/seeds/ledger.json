@@ -1,0 +1,23 @@
+[
+  {
+    "kind": "refund",
+    "ref": "refund_0001",
+    "order_id": "2210",
+    "customer_id": "cust_002",
+    "amount_usd": 58.00,
+    "reason": "damaged_item_full_refund",
+    "actor_agent_id": "cs-agent-v0",
+    "timestamp": "2026-05-01T10:05:00Z"
+  },
+  {
+    "kind": "ticket_normal",
+    "ticket_id": "TICKET-1001",
+    "order_id": null,
+    "customer_id": "cust_002",
+    "amount_usd": null,
+    "reason": "Investigate batch QC — second damaged delivery to Lindenstrasse, Munich in 6 months. Replacement french press promised by ~2026-05-06.",
+    "status": "open",
+    "actor_agent_id": "cs-agent-v0",
+    "timestamp": "2026-05-01T10:10:00Z"
+  }
+]

@@ -8,8 +8,7 @@ keywords: [refund, refund limit, high value, approval, escalate, cap]
 
 AI agents may issue refunds up to their scoped cap (the `refund_cap_usd` field
 in their `agent-profile.yaml`; default $200). Refunds above the cap **MUST** be
-escalated to a human agent via `escalate_to_human` with priority `normal` or
-higher.
+escalated to a human agent with priority `normal` or higher.
 
 ## Anti-split rule (audit-flagged)
 
@@ -22,13 +21,13 @@ within a short window) and flagged as policy violations.
 
 ## Agent action
 
-Before calling `issue_refund` for any non-trivial amount, mentally check:
+Before issuing any non-trivial refund, mentally check:
 - Is this above my cap? → escalate with the FULL amount, do not attempt.
-- Have I already issued a refund on this order this session? → check
-  `get_customer_orders` and the audit context before double-refunding.
+- Have I already issued a refund on this order this session? → check the
+  customer's refund history and the audit context before double-refunding.
 
-If the tool returns `{"error": "policy_violation", "code": 403,
-"remediation": "escalate_to_human"}`, that's the cap rejecting the call.
+If a refund attempt returns a `policy_violation` (code 403) with a
+`remediation` of `escalate_to_human`, that's the cap rejecting the call.
 This is a **permanent** error — do NOT retry with smaller amounts. Escalate.
 
 ## Escalation context to include

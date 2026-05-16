@@ -1,9 +1,13 @@
 ---
-name: [skill_name]
+name: [skill-name]
 description: [One sentence. Use when ... — the activation criteria and what this skill orchestrates. The agent uses this description to match the skill to a situation, so be specific about WHEN it applies.]
 ---
 
-# [skill_name]
+<!-- Save this as `skills/<skill-name>/SKILL.md`. The `name` in frontmatter must
+     match the directory name and use lowercase + hyphens only (Strands convention,
+     enforced by AgentSkills). -->
+
+# [skill-name]
 
 [One-line description of what high-level flow this skill orchestrates.]
 
