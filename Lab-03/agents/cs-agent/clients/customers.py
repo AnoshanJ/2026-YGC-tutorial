@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from . import orders as orders_client
 from ._data import load
 
 
@@ -28,7 +29,4 @@ def get_by_id(customer_id: str) -> dict[str, Any]:
 
 
 def list_orders(customer_id: str, limit: int = 10) -> list[dict[str, Any]]:
-    orders = load("orders.json")
-    matched = [o for o in orders if o["customer_id"] == customer_id]
-    matched.sort(key=lambda o: o["created_at"], reverse=True)
-    return matched[:limit]
+    return orders_client.list_for_customer(customer_id, limit=limit)

@@ -183,13 +183,13 @@ To show **per-instance config divergence**, run the SAME agent with different en
 REGION=na CURRENCY=USD REFUND_CAP=200 uvicorn app:app --port 8000 &
 
 # EMEA: REFUND_CAP=150 EUR — order 2050 is €407 → over cap → escalation
-REGION=emea LANGUAGE=fr CURRENCY=EUR REFUND_CAP=150 uvicorn app:app --port 8001 &
+REGION=emea LANGUAGE=fr CURRENCY=EUR REFUND_CAP=150 uvicorn app:app --port 8005 &
 
 # APAC: REFUND_CAP=20000 JPY — order 3001 is ¥34,800 → over cap → escalation
-REGION=apac LANGUAGE=ja CURRENCY=JPY REFUND_CAP=20000 uvicorn app:app --port 8002 &
+REGION=apac LANGUAGE=ja CURRENCY=JPY REFUND_CAP=20000 uvicorn app:app --port 8006 &
 
 # Test EMEA — should escalate
-curl -s -X POST localhost:8001/chat -H 'Content-Type: application/json' -d '{
+curl -s -X POST localhost:8005/chat -H 'Content-Type: application/json' -d '{
   "session_id":"emea-overcap",
   "message":"Bonjour, marie.dubois@example.fr — je veux un remboursement complet sur la commande 2050.",
   "context":{}

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from datetime import datetime, timezone
 from typing import Any
 
 from ._data import load
@@ -31,6 +32,21 @@ def get(order_id: str) -> dict[str, Any]:
     return deepcopy(_get_raw(order_id))
 
 
+def list_for_customer(customer_id: str, limit: int = 10) -> list[dict[str, Any]]:
+    """List a customer's orders newest-first, with in-memory overrides applied.
+
+    Refunds, cancellations, and address updates mutate `_OVERRIDES`; using disk
+    data alone would hide those mutations from the agent across turns.
+    """
+    merged: list[dict[str, Any]] = []
+    for o in load("orders.json"):
+        if o["customer_id"] != customer_id:
+            continue
+        merged.append(deepcopy(_OVERRIDES.get(o["id"], o)))
+    merged.sort(key=lambda o: o["created_at"], reverse=True)
+    return merged[:limit]
+
+
 def update_shipping_address(order_id: str, address: str) -> dict[str, Any]:
     o = deepcopy(_get_raw(order_id))
     if o["status"] not in ("processing",):
@@ -50,5 +66,20 @@ def cancel(order_id: str, reason: str) -> dict[str, Any]:
         )
     o["status"] = "cancelled"
     o["cancellation_reason"] = reason
+    _OVERRIDES[order_id] = o
+    return deepcopy(o)
+
+
+def mark_refunded(order_id: str, amount: float, receipt_id: str) -> dict[str, Any]:
+    """Stamp a refund onto the order so it's visible in subsequent reads.
+
+    Idempotent in spirit but not strict: a second call overwrites the prior
+    refund stamp. Callers (refunds.issue) decide whether to allow that.
+    """
+    o = deepcopy(_get_raw(order_id))
+    o["refund_status"] = "refunded"
+    o["refund_amount"] = amount
+    o["refund_receipt_id"] = receipt_id
+    o["refunded_at"] = datetime.now(timezone.utc).isoformat()
     _OVERRIDES[order_id] = o
     return deepcopy(o)

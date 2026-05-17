@@ -24,6 +24,35 @@
     --input: 214.3 31.8% 91.4%;
     --ring: 221.2 83.2% 53.3%;
     --radius: 0.75rem;
+
+    /* Northwind brand accent — soft teal that pairs with the indigo primary. */
+    --brand: 188 78% 41%;
+    --brand-foreground: 0 0% 100%;
+  }
+
+  .dark {
+    --background: 222 47% 6%;
+    --foreground: 210 40% 96%;
+    --card: 222 40% 9%;
+    --card-foreground: 210 40% 96%;
+    --popover: 222 40% 9%;
+    --popover-foreground: 210 40% 96%;
+    --primary: 217 91% 65%;
+    --primary-foreground: 222 47% 11%;
+    --secondary: 217 30% 17%;
+    --secondary-foreground: 210 40% 96%;
+    --muted: 217 30% 15%;
+    --muted-foreground: 215 20% 65%;
+    --accent: 217 30% 17%;
+    --accent-foreground: 210 40% 96%;
+    --destructive: 0 65% 55%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 217 30% 18%;
+    --input: 217 30% 18%;
+    --ring: 217 91% 65%;
+
+    --brand: 188 70% 55%;
+    --brand-foreground: 222 47% 8%;
   }
 
   * {
@@ -42,12 +71,91 @@
 /* Markdown-ish whitespace handling for agent responses */
 .whitespace-pre-wrap { white-space: pre-wrap; }
 
-/* Mesh-gradient background for the marketing/login page */
+/* Aurora mesh-gradient background — used on the marketing/login screens. */
 .bg-aurora {
   background:
-    radial-gradient(at 20% 10%, hsl(221 83% 53% / 0.12), transparent 50%),
-    radial-gradient(at 80% 0%, hsl(280 75% 60% / 0.08), transparent 55%),
-    radial-gradient(at 0% 90%, hsl(199 89% 55% / 0.10), transparent 55%),
-    radial-gradient(at 95% 95%, hsl(160 70% 50% / 0.08), transparent 50%),
+    radial-gradient(at 20% 10%, hsl(221 83% 53% / 0.14), transparent 50%),
+    radial-gradient(at 80% 0%, hsl(280 75% 60% / 0.10), transparent 55%),
+    radial-gradient(at 0% 90%, hsl(199 89% 55% / 0.12), transparent 55%),
+    radial-gradient(at 95% 95%, hsl(160 70% 50% / 0.10), transparent 50%),
     hsl(var(--background));
 }
+.dark .bg-aurora {
+  background:
+    radial-gradient(at 20% 10%, hsl(221 83% 53% / 0.22), transparent 50%),
+    radial-gradient(at 80% 0%, hsl(280 75% 60% / 0.18), transparent 55%),
+    radial-gradient(at 0% 90%, hsl(199 89% 55% / 0.18), transparent 55%),
+    radial-gradient(at 95% 95%, hsl(160 70% 50% / 0.14), transparent 50%),
+    hsl(var(--background));
+}
+
+/* Subtle dotted grid — used as a hero backdrop on the landing page. */
+.bg-grid {
+  background-image:
+    radial-gradient(hsl(var(--foreground) / 0.08) 1px, transparent 1px);
+  background-size: 22px 22px;
+}
+
+/* Animated brand orb — pure CSS, no images. */
+.brand-orb {
+  position: relative;
+  isolation: isolate;
+}
+.brand-orb::before,
+.brand-orb::after {
+  content: "";
+  position: absolute;
+  inset: -20%;
+  border-radius: 9999px;
+  filter: blur(40px);
+  opacity: 0.55;
+  z-index: -1;
+}
+.brand-orb::before {
+  background: conic-gradient(from 180deg at 50% 50%,
+    hsl(221 83% 53% / 0.7),
+    hsl(280 75% 60% / 0.5),
+    hsl(188 78% 50% / 0.6),
+    hsl(221 83% 53% / 0.7));
+  animation: orb-spin 18s linear infinite;
+}
+.brand-orb::after {
+  background: radial-gradient(circle at 30% 30%,
+    hsl(199 89% 55% / 0.55),
+    transparent 60%);
+  animation: orb-spin 26s linear infinite reverse;
+}
+@keyframes orb-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Brand utility for the teal accent. */
+.text-brand { color: hsl(var(--brand)); }
+.bg-brand { background-color: hsl(var(--brand)); color: hsl(var(--brand-foreground)); }
+.from-brand { --tw-gradient-from: hsl(var(--brand)); }
+
+/* Marketing-card sheen on hover. */
+.card-sheen {
+  position: relative;
+  overflow: hidden;
+}
+.card-sheen::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(120deg,
+    transparent 30%,
+    hsl(var(--foreground) / 0.05) 50%,
+    transparent 70%);
+  transform: translateX(-100%);
+  transition: transform 0.7s ease;
+  pointer-events: none;
+}
+.card-sheen:hover::after { transform: translateX(100%); }
+
+/* Floating tag chips on the hero — vertical drift loop. */
+@keyframes float-soft {
+  0%, 100% { transform: translateY(0) }
+  50% { transform: translateY(-8px) }
+}
+.animate-float { animation: float-soft 6s ease-in-out infinite; }

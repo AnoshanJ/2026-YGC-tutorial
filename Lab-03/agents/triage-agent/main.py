@@ -10,8 +10,6 @@ Run locally (not via the AM build path) as an external agent:
 it injects OTEL auto-instrumentation for CrewAI / OpenAI / LangChain at
 interpreter startup. Traces are pushed to AMP_OTEL_ENDPOINT and the agent's
 record in AM auto-registers (or attaches) on the first span.
-
-``seed-2.sh`` handles the env wiring + process management for the demo.
 """
 
 from __future__ import annotations

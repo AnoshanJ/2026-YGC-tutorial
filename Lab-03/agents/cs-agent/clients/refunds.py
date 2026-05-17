@@ -10,6 +10,8 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
+from . import orders as orders_client
+
 _LOG: list[dict[str, Any]] = []
 
 
@@ -42,6 +44,17 @@ def issue(
         "status": "issued",
     }
     _LOG.append(receipt)
+    # Stamp the order so subsequent reads (get_order, get_customer_orders)
+    # reflect that this order was already refunded. Best-effort: if the order
+    # row is missing, we still return the receipt — the refund happened.
+    try:
+        orders_client.mark_refunded(
+            order_id=order_id,
+            amount=amount,
+            receipt_id=receipt["receipt_id"],
+        )
+    except orders_client.OrderNotFound:
+        pass
     return dict(receipt)
 
 

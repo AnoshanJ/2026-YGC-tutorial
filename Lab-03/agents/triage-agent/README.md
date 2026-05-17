@@ -17,7 +17,7 @@ Each sub-agent produces its own OTEL agent-span via amp-instrumentation. The res
 
 ## How OTEL push works
 
-`amp-instrument` is the CLI wrapper bundled with `amp-instrumentation` (a separate pip package — see `seed-2.sh`, which installs it into a venv at first run). It:
+`amp-instrument` is the CLI wrapper bundled with `amp-instrumentation` (a separate pip package, installed via `pip install amp-instrumentation`). It:
 
 - Loads OTEL auto-instrumentation hooks for CrewAI, OpenAI, LangChain, etc. via the standard Python `sitecustomize` mechanism, so they fire on `import` regardless of how the agent code is structured.
 - Wires the OTEL SDK's HTTP exporter to `AMP_OTEL_ENDPOINT` and authenticates spans with `AMP_AGENT_API_KEY`. Both env vars must be set in the process environment.
@@ -26,24 +26,11 @@ Run-time contract:
 
 | Var | Required | Source |
 |---|---|---|
-| `AMP_OTEL_ENDPOINT` | yes | seed/.env (defaults to `http://localhost:22893/otel` locally) |
-| `AMP_AGENT_API_KEY` | yes | minted by `POST /api/v1/orgs/{org}/projects/{proj}/agents/{name}/token?environment={env}` — seed-2 does this automatically |
-| `OPENAI_API_KEY`    | yes | seed/.env — the crew calls OpenAI directly |
+| `AMP_OTEL_ENDPOINT` | yes | set in environment; defaults to `http://localhost:22893/otel` for a local AM |
+| `AMP_AGENT_API_KEY` | yes | minted by `POST /api/v1/orgs/{org}/projects/{proj}/agents/{name}/token?environment={env}` |
+| `OPENAI_API_KEY`    | yes | set in environment — the crew calls OpenAI directly |
 
-## Run via seed-2 (recommended)
-
-```bash
-cd Lab-03/seed
-bash seed-2.sh
-```
-
-`seed-2.sh` creates a venv under `agents/triage-agent/.venv` (one-time, ~1 min), installs `requirements.txt` + `amp-instrumentation`, fetches the AMP token, exports it along with `AMP_OTEL_ENDPOINT` + `OPENAI_API_KEY`, and starts the agent in the background. PID + log are stored in `seed/.seed-cache/`. Stop with:
-
-```bash
-kill $(cat Lab-03/seed/.seed-cache/triage-agent.pid)
-```
-
-## Run manually
+## Run
 
 ```bash
 cd Lab-03/agents/triage-agent

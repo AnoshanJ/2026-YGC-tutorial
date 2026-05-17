@@ -44,16 +44,7 @@ The proxy target is read from `public/config.js` **at dev-server startup**. Afte
 
 ## Run
 
-Two terminals.
-
-**Terminal 1 — generate config.js by running seed-2:**
-
-```bash
-cd Lab-03/seed
-bash seed-2.sh           # writes ../web/cs-chat/public/config.js
-```
-
-**Terminal 2 — start the dev server:**
+Once `public/config.js` exists (see "Configure the agent connection" above), start the dev server:
 
 ```bash
 cd Lab-03/web/cs-chat
@@ -102,5 +93,5 @@ src/
 │   ├── Composer.tsx
 │   └── ui/            — shadcn primitives (button, input, card, …)
 public/
-└── config.js          — gitignored; written by seed-2.sh
+└── config.js          — gitignored; copy from config.sample.js
 ```

@@ -18,6 +18,7 @@ history across turns — sufficient for demo prep; not durable across restarts.
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
@@ -68,13 +69,13 @@ class ChatResponse(BaseModel):
 
 app = FastAPI(title="CS Agent", version="0.1.0")
 
-# CORS for the mock-login chat frontend served from a local static server.
+# CORS for the mock-login chat frontend. Override with CHAT_UI_ORIGINS
+# (comma-separated) when the UI is served from a non-default origin.
+_default_origins = "http://localhost:5173,http://127.0.0.1:5173"
+_origins = [o.strip() for o in os.environ.get("CHAT_UI_ORIGINS", _default_origins).split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-    ],
+    allow_origins=_origins,
     allow_credentials=False,
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["x-api-key", "Content-Type", "Authorization"],

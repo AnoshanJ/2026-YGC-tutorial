@@ -35,7 +35,10 @@ function buildProxy() {
     return undefined;
   }
   const target = u.origin;
-  const agentPath = u.pathname.replace(/\/+$/, "");
+  // config.js may set a URL ending in "/chat", but the browser also asks for
+  // /proxy/agent/chat — so strip the trailing /chat off the proxy base to
+  // avoid /chat/chat (which 404s on the gateway).
+  const agentPath = u.pathname.replace(/\/+$/, "").replace(/\/chat$/, "");
   console.log(`[vite] proxying /proxy/agent/* -> ${target}${agentPath}/*`);
   return {
     "/proxy/agent": {
