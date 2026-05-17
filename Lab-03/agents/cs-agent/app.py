@@ -3,12 +3,13 @@
 Implements the AM chat-agent contract: ``POST /chat`` on port 8000 accepting
 ``{session_id, message, context}`` and returning ``{response, session_id}``.
 
-Customer identity is supplied via the ``X-Customer-Id`` request header (set
-by the mock-login chat frontend). The full customer profile is loaded server-
-side and injected into the per-request system message; the agent never asks
-for or looks up the user. Customer attributes are also attached to the
-current OTEL root span so traces are filterable by customer/tier/region in
-the AM console.
+Customer identity is supplied **inside the request body** as
+``context.customer_id`` — the AM chat-agent spec's official mechanism for
+client-supplied request metadata. The full customer profile is loaded
+server-side and injected into the per-request system message; the agent
+never asks for or looks up the user. Customer attributes are also attached
+to the current OTEL root span so traces are filterable by customer / tier /
+region in the AM console.
 
 A simple in-memory message store keyed by ``session_id`` keeps conversation
 history across turns — sufficient for demo prep; not durable across restarts.
@@ -19,7 +20,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from pydantic import BaseModel
@@ -76,7 +77,7 @@ app.add_middleware(
     ],
     allow_credentials=False,
     allow_methods=["GET", "POST", "OPTIONS"],
-    allow_headers=["x-api-key", "X-Customer-Id", "Content-Type", "Authorization"],
+    allow_headers=["x-api-key", "Content-Type", "Authorization"],
 )
 
 
@@ -90,15 +91,18 @@ def health() -> dict[str, Any]:
 
 
 @app.post("/chat", response_model=ChatResponse)
-def chat(
-    req: ChatRequest,
-    x_customer_id: str | None = Header(default=None, alias="X-Customer-Id"),
-) -> ChatResponse:
-    if not x_customer_id:
-        raise HTTPException(status_code=400, detail="X-Customer-Id header is required")
+def chat(req: ChatRequest) -> ChatResponse:
+    # AM chat-agent spec: client-supplied identity travels in the request
+    # body's `context` field (see ChatRequest), not as a custom header.
+    customer_id = (req.context or {}).get("customer_id") if req.context else None
+    if not customer_id:
+        raise HTTPException(
+            status_code=400,
+            detail="context.customer_id is required in the request body",
+        )
 
     try:
-        customer = customers_client.get_by_id(x_customer_id)
+        customer = customers_client.get_by_id(customer_id)
     except customers_client.CustomerNotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
