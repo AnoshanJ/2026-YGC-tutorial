@@ -106,7 +106,19 @@ def _faulty_prompt_enabled() -> bool:
 
 
 def build_agent(cfg: Config) -> Any:
-    llm = ChatOpenAI(model=MODEL, temperature=0)
+    # When OPENAI_BASE_URL points at an AM-style gateway, the gateway expects
+    # an X-API-Key header instead of the SDK's default `Authorization: Bearer`.
+    # OPENAI_GATEWAY_API_KEY, if set, is sent as that header on every request;
+    # in direct-OpenAI mode it's unset and ChatOpenAI behaves normally.
+    gateway_key = os.environ.get("OPENAI_GATEWAY_API_KEY", "").strip()
+    extra: dict[str, Any] = {}
+    if gateway_key:
+        extra["default_headers"] = {"X-API-Key": gateway_key}
+        # The OpenAI SDK refuses to initialize without OPENAI_API_KEY, but the
+        # gateway authenticates off X-API-Key and ignores the Bearer token —
+        # so drop in a placeholder if the caller hasn't set one themselves.
+        os.environ.setdefault("OPENAI_API_KEY", "sk-gateway-placeholder")
+    llm = ChatOpenAI(model=MODEL, temperature=0, **extra)
     tools = build_tools(cfg)
     return create_react_agent(model=llm, tools=tools)
 
