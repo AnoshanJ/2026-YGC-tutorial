@@ -13,7 +13,7 @@ import type { Message } from "@/components/MessageBubble";
 
 const OPENAI_KEY_STORAGE = "nw-openai-key";
 const ENDPOINT = "https://api.openai.com/v1/chat/completions";
-const MODEL = "gpt-4o-mini";
+const MODEL = "gpt-5.4-mini";
 
 /* ---------- key management --------------------------------------------- */
 

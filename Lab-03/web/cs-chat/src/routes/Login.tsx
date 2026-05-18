@@ -1,6 +1,6 @@
 import { FormEvent, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { ArrowLeft, MessageCircle, ShieldCheck, Sparkles } from "lucide-react";
+import { ArrowLeft, Eye, EyeOff, MessageCircle, ShieldCheck, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -16,6 +16,7 @@ export default function Login() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [showDemos, setShowDemos] = useState(false);
 
   const onSubmit = (e: FormEvent) => {
     e.preventDefault();
@@ -119,13 +120,24 @@ export default function Login() {
               </Button>
             </form>
 
-            <div className="mt-6 rounded-md border bg-muted/40 px-3 py-3 text-xs text-muted-foreground space-y-1.5">
-              <p className="font-semibold text-foreground">Try a demo account</p>
-              <DemoRow email="ava.morgan@example.com" tag="gold · NA" onPick={useDemo} />
-              <DemoRow email="lukas.weber@example.de" tag="silver · EMEA" onPick={useDemo} />
-              <DemoRow email="sora.tanaka@example.jp" tag="gold · APAC" onPick={useDemo} />
-              <p className="pt-1">Password is anything non-empty.</p>
+            <div className="mt-6 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setShowDemos((v) => !v)}
+                aria-label={showDemos ? "Hide demo accounts" : "Show demo accounts"}
+                className="rounded p-1 text-muted-foreground/30 hover:text-muted-foreground transition-colors"
+              >
+                {showDemos ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+              </button>
             </div>
+            {showDemos && (
+              <div className="mt-2 rounded-md border bg-muted/40 px-3 py-3 text-xs text-muted-foreground space-y-1.5">
+                <DemoRow email="ava.morgan@example.com" tag="gold · NA" onPick={useDemo} />
+                <DemoRow email="lukas.weber@example.de" tag="silver · EMEA" onPick={useDemo} />
+                <DemoRow email="sora.tanaka@example.jp" tag="gold · APAC" onPick={useDemo} />
+                <p className="pt-1">Password is anything non-empty.</p>
+              </div>
+            )}
           </CardContent>
         </Card>
       </div>

@@ -47,7 +47,7 @@ export function Composer({
         onKeyDown={handleKeyDown}
         placeholder="Type your message…  (Enter to send, Shift+Enter for newline)"
         rows={1}
-        className="resize-none max-h-40"
+        className="resize-none min-h-10 max-h-40 py-2 leading-6"
         disabled={disabled}
       />
       <Button type="submit" size="icon" disabled={disabled || !value.trim()}>

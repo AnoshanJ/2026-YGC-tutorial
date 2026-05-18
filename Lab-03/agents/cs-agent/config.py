@@ -35,6 +35,7 @@ class Config:
     refund_cap: float
     tone: str
     company_name: str
+    agent_name: str
     additional_guidance: str
     escalation_queue: str
 
@@ -46,7 +47,11 @@ class Config:
             currency=_env("CURRENCY", "USD"),
             refund_cap=_env_float("REFUND_CAP", 200.0),
             tone=_env("TONE", "friendly"),
-            company_name=_env("COMPANY_NAME", "Acme"),
+            # COMPANY_NAME is declared mandatory on the kind's configSchema;
+            # the default here is a safety net for local dev only (running
+            # `python main.py` without an AM-provisioned env).
+            company_name=_env("COMPANY_NAME", "Northwind"),
+            agent_name=_env("AGENT_NAME", "Aria"),
             additional_guidance=_env("ADDITIONAL_GUIDANCE", ""),
             escalation_queue=_env("ESCALATION_QUEUE", "cs-escalations"),
         )

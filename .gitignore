@@ -30,3 +30,6 @@ mocks/data/*.json
 # Runtime customer memory (Bob's is committed as the seed)
 memory/customer_*.md
 !memory/customer_cust_002.md
+
+seed/
+labs/
