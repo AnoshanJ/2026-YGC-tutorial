@@ -1,6 +1,4 @@
-"""Reset the lab's runtime state — restore mocks/data/ from seeds (including
-the audit ledger), drop any non-seeded customer memory, wipe Strands session
-storage.
+"""Reset the lab's persistent on-disk state — wipe non-seeded episodic memory.
 
 Run this between demos / rehearsals to get back to the canonical starting
 state:
@@ -9,54 +7,41 @@ state:
 
 What it touches:
 
-- mocks/data/customers.json          ← copied from mocks/seeds/customers.json
-- mocks/data/orders.json             ← copied from mocks/seeds/orders.json
-- mocks/data/ledger.json             ← copied from mocks/seeds/ledger.json
-                                       (carries Bob's prior refund_0001 +
-                                        TICKET-1001 used by §3's episodic
-                                        memory demo)
-- memory/episodic/customer_*.md      ← deleted, EXCEPT customer_cust_002.md
-                                       (Bob's seeded memory, committed to git)
-- memory/sessions/                   ← contents removed (Strands FileSessionManager
-                                       state per customer — chat transcripts for
-                                       §3's conversation memory layer)
+- cs_agent_v2/memory/episodic/customer_*.md  ← deleted, EXCEPT
+                                                customer_cust_002.md (Bob's
+                                                seeded memory, committed to
+                                                git for the §3 demo)
+
+What this does NOT touch:
+
+- Mock customer/order/ledger state lives in-memory in each agent's running
+  process and is re-seeded from `mocks/seeds/*.json` on startup.
+- Conversation memory (`agent.messages` on each cached Agent) is in-process
+  only — restart the agent processes or hit `/api/reset` to wipe it.
+
+To clear the in-process state, either:
+
+  - restart the agent process(es), or
+  - click "reset" in the web UI (hits both agents' `/api/reset`), or
+  - `curl -X POST http://localhost:8001/api/reset` and `:8002` directly.
 
 If Bob's memory file got modified by `compact_memory` during a demo,
 restore it via:
 
-    git restore memory/episodic/customer_cust_002.md
-
-(reset.py doesn't overwrite that file because it's the canonical seed and
-we don't want to keep two copies of the same content in the repo.)
+    git restore cs_agent_v2/memory/episodic/customer_cust_002.md
 """
 
-import shutil
 from pathlib import Path
 
 ROOT = Path(__file__).parent
-DATA_DIR = ROOT / "mocks" / "data"
-SEEDS_DIR = ROOT / "mocks" / "seeds"
-EPISODIC_DIR = ROOT / "memory" / "episodic"
-SESSIONS_DIR = ROOT / "memory" / "sessions"
+EPISODIC_DIR = ROOT / "cs_agent_v2" / "memory" / "episodic"
 
 # Bob's memory is the one seeded file we keep — committed to git.
 KEEP_MEMORY_FILES = {"customer_cust_002.md"}
 
 
-def reset_mocks() -> list[str]:
-    """Copy every seed JSON into mocks/data/. Includes ledger.json so the
-    pre-existing TICKET-1001 + refund_0001 are present at demo start."""
-    DATA_DIR.mkdir(exist_ok=True)
-    touched = []
-    for seed in SEEDS_DIR.glob("*.json"):
-        target = DATA_DIR / seed.name
-        target.write_text(seed.read_text())
-        touched.append(str(target.relative_to(ROOT)))
-    return touched
-
-
 def reset_memory() -> list[str]:
-    """Remove non-seeded customer memory files under memory/episodic/."""
+    """Remove non-seeded customer memory files under cs_agent_v2/memory/episodic/."""
     if not EPISODIC_DIR.exists():
         return []
     removed = []
@@ -68,39 +53,17 @@ def reset_memory() -> list[str]:
     return removed
 
 
-def reset_sessions() -> list[str]:
-    """Wipe FileSessionManager state. Each customer's chat history lives in
-    memory/sessions/session_<customer_id>/."""
-    if not SESSIONS_DIR.exists():
-        return []
-    removed = []
-    for entry in SESSIONS_DIR.iterdir():
-        if entry.is_dir():
-            shutil.rmtree(entry)
-        else:
-            entry.unlink()
-        removed.append(str(entry.relative_to(ROOT)))
-    return removed
-
-
 def main() -> None:
     print("Resetting lab state…\n")
-
-    touched = reset_mocks()
-    for path in touched:
-        print(f"  ✓ {path}")
 
     removed = reset_memory()
     for path in removed:
         print(f"  ✗ removed {path}")
 
-    sessions_removed = reset_sessions()
-    for path in sessions_removed:
-        print(f"  ✗ removed {path}")
-
     print("\nDone.")
-    print("If memory/episodic/customer_cust_002.md was modified by `compact_memory`,")
-    print("restore it with: git restore memory/episodic/customer_cust_002.md")
+    print("Note: mock customer/order/ledger state and conversation memory")
+    print("live in-process in the running agent services. Restart them, hit")
+    print("/api/reset, or click 'reset' in the web UI to wipe.")
 
 
 if __name__ == "__main__":

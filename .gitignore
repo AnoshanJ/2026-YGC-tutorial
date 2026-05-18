@@ -3,8 +3,26 @@ __pycache__/
 *.egg-info/
 .venv/
 venv/
+build/
 .env
 .DS_Store
+
+# Python tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff*
+
+# Node / web
+node_modules/
+dist/
+.next/
+*.tsbuildinfo
+
+# Editor
+.idea/
+.vscode/
+*.log
+*.swp
 
 # Runtime mock state (seeded from mocks/seeds/ on first run; reset with `python reset.py`)
 mocks/data/*.json
@@ -12,7 +30,3 @@ mocks/data/*.json
 # Runtime customer memory (Bob's is committed as the seed)
 memory/customer_*.md
 !memory/customer_cust_002.md
-
-*.swp
-
-.ruff*
