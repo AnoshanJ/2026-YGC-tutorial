@@ -67,7 +67,9 @@ class _Handler(BaseHTTPRequestHandler):
             },
         )
 
-    def log_message(self, *_args, **_kwargs) -> None:  # silence per-request stderr noise
+    def log_message(
+        self, *_args, **_kwargs
+    ) -> None:  # silence per-request stderr noise
         return
 
 

@@ -103,20 +103,20 @@ def _build_tasks(agents: dict[str, Agent], email: dict[str, Any]) -> list[Task]:
             "Classify the following email. Return a JSON object with keys "
             "'category' (one of refund_request, shipping_question, product_question, "
             "complaint, other) and 'confidence' (0..1).\n\n"
-            f"From: {email.get('from','')}\n"
-            f"Subject: {email.get('subject','')}\n"
-            f"Body: {email.get('body','')}"
+            f"From: {email.get('from', '')}\n"
+            f"Subject: {email.get('subject', '')}\n"
+            f"Body: {email.get('body', '')}"
         ),
-        expected_output="JSON: {\"category\": ..., \"confidence\": ...}",
+        expected_output='JSON: {"category": ..., "confidence": ...}',
         agent=agents["classifier"],
     )
     route = Task(
         description=(
             "Given the classification from the previous step, look up the owning "
             "team and decide the priority. Return JSON: "
-            "{\"team\": ..., \"queue\": ..., \"priority\": one of low|normal|high}."
+            '{"team": ..., "queue": ..., "priority": one of low|normal|high}.'
         ),
-        expected_output="JSON: {\"team\": ..., \"queue\": ..., \"priority\": ...}",
+        expected_output='JSON: {"team": ..., "queue": ..., "priority": ...}',
         agent=agents["router"],
         context=[classify],
     )
@@ -135,12 +135,10 @@ def _build_tasks(agents: dict[str, Agent], email: dict[str, Any]) -> list[Task]:
         description=(
             "Run tone_check and policy_compliance_check on the draft from the "
             "previous step, with the category from the classifier. Return JSON: "
-            "{\"verdict\": approved|needs_revision, \"reasons\": [...], \"final\": "
+            '{"verdict": approved|needs_revision, "reasons": [...], "final": '
             "the draft text unchanged}."
         ),
-        expected_output=(
-            "JSON: {\"verdict\": ..., \"reasons\": [...], \"final\": ...}"
-        ),
+        expected_output=('JSON: {"verdict": ..., "reasons": [...], "final": ...}'),
         agent=agents["verifier"],
         context=[classify, draft],
     )

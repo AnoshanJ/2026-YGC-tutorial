@@ -103,12 +103,13 @@ def build_tools(cfg: Config) -> list[Any]:
             return json.dumps(receipt)
         except refunds_client.RefundOverCap as e:
             return (
-                "ERROR: "
-                f"{e} Use escalate_to_human to forward this request to a person."
+                f"ERROR: {e} Use escalate_to_human to forward this request to a person."
             )
 
     @tool
-    def escalate_to_human(customer_id: str, summary: str, priority: str = "normal") -> str:
+    def escalate_to_human(
+        customer_id: str, summary: str, priority: str = "normal"
+    ) -> str:
         """Hand the case to a human agent on the configured escalation queue.
 
         Use this for over-cap refunds, unclear policy questions, abusive prompts,

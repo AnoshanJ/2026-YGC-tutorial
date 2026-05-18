@@ -107,7 +107,9 @@ def build_agent(cfg: Config) -> Any:
 
 
 def system_message_for(cfg: Config, customer: dict[str, Any]) -> SystemMessage:
-    template = SYSTEM_PROMPT_FAULTY if _faulty_prompt_enabled() else SYSTEM_PROMPT_STRICT
+    template = (
+        SYSTEM_PROMPT_FAULTY if _faulty_prompt_enabled() else SYSTEM_PROMPT_STRICT
+    )
     content = template.format(
         company_name=cfg.company_name,
         region=cfg.region.upper(),

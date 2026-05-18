@@ -80,7 +80,11 @@ app = FastAPI(title="CS Agent", version="0.1.0")
 # CORS for the mock-login chat frontend. Override with CHAT_UI_ORIGINS
 # (comma-separated) when the UI is served from a non-default origin.
 _default_origins = "http://localhost:5173,http://127.0.0.1:5173"
-_origins = [o.strip() for o in os.environ.get("CHAT_UI_ORIGINS", _default_origins).split(",") if o.strip()]
+_origins = [
+    o.strip()
+    for o in os.environ.get("CHAT_UI_ORIGINS", _default_origins).split(",")
+    if o.strip()
+]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_origins,
@@ -126,7 +130,9 @@ def chat(req: ChatRequest) -> ChatResponse:
         if req.session_id:
             span.set_attribute("session.id", req.session_id)
 
-    history = SESSIONS.setdefault(req.session_id or "anon", []) if req.session_id else []
+    history = (
+        SESSIONS.setdefault(req.session_id or "anon", []) if req.session_id else []
+    )
     sys_msg = system_message_for(CONFIG, customer)
     user_msg = HumanMessage(content=req.message)
     messages: list[BaseMessage] = [sys_msg, *history, user_msg]
@@ -147,7 +153,8 @@ def chat(req: ChatRequest) -> ChatResponse:
     final_text: Any = final_ai.content if final_ai is not None else "(no response)"
     if isinstance(final_text, list):
         final_text = "\n".join(
-            part.get("text", "") if isinstance(part, dict) else str(part) for part in final_text
+            part.get("text", "") if isinstance(part, dict) else str(part)
+            for part in final_text
         )
 
     # Persist this turn's user + final AI message so subsequent turns have context.

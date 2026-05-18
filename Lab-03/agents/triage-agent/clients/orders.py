@@ -12,4 +12,10 @@ def status_for(order_id: str) -> dict[str, Any]:
     for o in rows:
         if o["id"] == order_id:
             return dict(o)
-    return {"id": order_id, "status": "not_found", "carrier": "", "tracking": "", "eta": ""}
+    return {
+        "id": order_id,
+        "status": "not_found",
+        "carrier": "",
+        "tracking": "",
+        "eta": "",
+    }
