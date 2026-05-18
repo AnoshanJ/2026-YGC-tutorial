@@ -11,6 +11,10 @@ never asks for or looks up the user. Customer attributes are also attached
 to the current OTEL root span so traces are filterable by customer / tier /
 region in the AM console.
 
+If the client omits ``context.customer_id`` (e.g. AM console's Try-it-out
+panel, which sends bare ``{message}`` payloads), the request falls back to
+``DEFAULT_CUSTOMER_ID`` so the agent stays usable for quick smoke tests.
+
 A simple in-memory message store keyed by ``session_id`` keeps conversation
 history across turns — sufficient for demo prep; not durable across restarts.
 """
@@ -40,6 +44,10 @@ from config import Config
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("cs-agent")
+
+# Fallback for clients that don't supply context.customer_id (notably AM's
+# Try-it-out panel). Must match an id present in data/customers.json.
+DEFAULT_CUSTOMER_ID = "C-1001"
 
 CONFIG = Config.from_env()
 AGENT = build_agent(CONFIG)
@@ -94,13 +102,16 @@ def health() -> dict[str, Any]:
 @app.post("/chat", response_model=ChatResponse)
 def chat(req: ChatRequest) -> ChatResponse:
     # AM chat-agent spec: client-supplied identity travels in the request
-    # body's `context` field (see ChatRequest), not as a custom header.
+    # body's `context` field (see ChatRequest), not as a custom header. The
+    # AM console's Try-it-out panel sends no context, so we fall back to a
+    # known seed customer rather than 400-ing.
     customer_id = (req.context or {}).get("customer_id") if req.context else None
     if not customer_id:
-        raise HTTPException(
-            status_code=400,
-            detail="context.customer_id is required in the request body",
+        log.warning(
+            "no context.customer_id in request; falling back to default %s",
+            DEFAULT_CUSTOMER_ID,
         )
+        customer_id = DEFAULT_CUSTOMER_ID
 
     try:
         customer = customers_client.get_by_id(customer_id)
