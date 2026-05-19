@@ -113,7 +113,7 @@ def build_agent(cfg: Config) -> Any:
     gateway_key = os.environ.get("OPENAI_GATEWAY_API_KEY", "").strip()
     extra: dict[str, Any] = {}
     if gateway_key:
-        extra["default_headers"] = {"X-API-Key": gateway_key}
+        extra["default_headers"] = {"api-key": gateway_key}
         # The OpenAI SDK refuses to initialize without OPENAI_API_KEY, but the
         # gateway authenticates off X-API-Key and ignores the Bearer token —
         # so drop in a placeholder if the caller hasn't set one themselves.
