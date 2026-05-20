@@ -1,4 +1,4 @@
-import { getSeedConfig, type AgentConfig } from "./config";
+import type { AgentConfig } from "./config";
 
 export type ChatRequest = { message: string; session_id: string };
 export type ChatResponse = { response: string; session_id?: string };
@@ -10,22 +10,14 @@ function normalizeAgentUrl(raw: string): string {
 
 // URL selection rules:
 //   - In dev, the Vite proxy at /proxy/agent/* forwards to the URL baked from
-//     public/config.js at server start. We use it whenever the *current* URL
-//     matches the seed URL — regardless of whether it came from config.js or
-//     a Settings-dialog override that just happens to point at the same place.
-//     Same-origin → no CORS preflight.
-//   - Otherwise (the override URL is different, or we're in a prod build),
-//     we call the agent URL directly. That path needs the AM gateway / agent
-//     to permit CORS for the page origin.
+//     public/config.js at server start. Same-origin → no CORS preflight.
+//   - In a production build (no Vite proxy), we call the agent URL directly,
+//     which requires the AM gateway / agent to permit CORS for this origin.
 function chatUrl(config: AgentConfig): string {
-  const target = normalizeAgentUrl(config.url);
   if (import.meta.env.DEV) {
-    const seed = getSeedConfig();
-    if (seed && normalizeAgentUrl(seed.url) === target) {
-      return "/proxy/agent/chat";
-    }
+    return "/proxy/agent/chat";
   }
-  return target;
+  return normalizeAgentUrl(config.url);
 }
 
 // Customer identity travels in the request body's `context` field, per the

@@ -1,13 +1,12 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { useNavigate } from "react-router-dom";
-import { AlertTriangle, Bot, Settings } from "lucide-react";
+import { AlertTriangle, Bot } from "lucide-react";
 import { TopBar } from "@/components/TopBar";
 import { KnowledgeGraph, type GraphStatus } from "@/components/KnowledgeGraph";
 import { MessageBubble, TypingBubble, type Message } from "@/components/MessageBubble";
 import { Composer } from "@/components/Composer";
 import { SuggestionChips } from "@/components/SuggestionChips";
 import { SettingsDialog } from "@/components/SettingsDialog";
-import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   clearCurrentUser,
@@ -15,7 +14,7 @@ import {
   getOrCreateSession,
   rotateSession,
 } from "@/lib/auth";
-import { getAgentConfig, subscribeAgentConfig } from "@/lib/config";
+import { getAgentConfig } from "@/lib/config";
 import { sendChat } from "@/lib/api";
 import {
   EMPTY_GRAPH,
@@ -25,10 +24,6 @@ import {
   type KnowledgeGraph as KG,
 } from "@/lib/extract";
 
-function useAgentConfig() {
-  return useSyncExternalStore(subscribeAgentConfig, getAgentConfig, getAgentConfig);
-}
-
 function useOpenAIKey() {
   return useSyncExternalStore(subscribeOpenAIKey, getOpenAIKey, getOpenAIKey);
 }
@@ -36,7 +31,9 @@ function useOpenAIKey() {
 export default function Chat() {
   const navigate = useNavigate();
   const [user] = useState(() => getCurrentUser());
-  const config = useAgentConfig();
+  // Agent config is baked in from public/config.js at page load — never
+  // changes at runtime, so a single read is enough.
+  const [config] = useState(() => getAgentConfig());
   const openaiKey = useOpenAIKey();
   const [sessionId, setSessionId] = useState<string>(() =>
     user ? getOrCreateSession(user.id) : "",
@@ -112,7 +109,7 @@ export default function Chat() {
           id: `e-${Date.now()}`,
           role: "error",
           content:
-            "Aria isn't connected yet. Click Settings to point her at a deployed agent.",
+            "Aria isn't connected to an agent. Generate public/config.js (run seed-2.sh) and reload the page.",
           ts: Date.now(),
         },
       ]);
@@ -182,17 +179,9 @@ export default function Chat() {
             <div className="flex items-start gap-3 border-b bg-amber-500/10 px-5 py-3 text-sm text-amber-900 dark:text-amber-300">
               <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
               <div className="flex-1">
-                Aria isn't connected to an agent yet. Open Settings to paste a URL and API key.
+                Aria isn't connected to an agent. <code className="font-mono text-xs">public/config.js</code> is
+                missing &mdash; run <code className="font-mono text-xs">seed-2.sh</code> from the seed directory and reload this page.
               </div>
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => setSettingsOpen(true)}
-                className="shrink-0"
-              >
-                <Settings className="h-3.5 w-3.5" />
-                Connect
-              </Button>
             </div>
           )}
           <ScrollArea className="flex-1">
