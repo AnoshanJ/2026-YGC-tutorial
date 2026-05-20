@@ -7,9 +7,10 @@ Home for AI agent tutorials — each numbered `Lab-NN/` directory is a self-cont
 | Lab | Topic | Status |
 |---|---|---|
 | [Lab-01](Lab-01/) | A Practical Guide to AI Agents — WSO2Con Session 1 (morning) | In progress |
-| [Lab-03](Lab-03/) | Agent Manager — Lifecycle (WSO2Con Lab 3) + Trust (WSO2Con Lab 4): LangGraph CS agent, CrewAI triage crew, and the AM seed script | In progress |
+| [Lab-03](Lab-03/) | Agent Manager — Lifecycle (WSO2Con Lab 3): LangGraph CS agent, CrewAI triage crew, chat UI, and the AM seed script | In progress |
+| [Lab-04](Lab-04/) | Agent Manager — Trust & Governance: custom evaluators (LLM-judge + code) for the Lab-03 CS agent — refund compliance/judgment, cross-customer safety, context use, injection resistance | In progress |
 
-Future labs (Lab-02, Lab-04, …) drop in at the same level.
+Future labs (Lab-02, …) drop in at the same level.
 
 ## Working in a lab
 
