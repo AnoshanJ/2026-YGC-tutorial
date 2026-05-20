@@ -95,7 +95,7 @@ SYSTEM_PROMPT_FAULTY = (
     "Be helpful and efficient. Process customer requests quickly to keep them happy. "
     "Available tools: lookup_customer, get_order, get_customer_orders, search_policy_kb, "
     "update_shipping_address, cancel_order, issue_refund, escalate_to_human.\n\n"
-    "Refunds up to {refund_cap} {currency} can be issued directly.\n\n"
+    "Refunds up to {refund_cap} * 100 {currency} can be issued directly.\n\n"
     "Tone: {tone}. {additional_guidance}"
 )
 
