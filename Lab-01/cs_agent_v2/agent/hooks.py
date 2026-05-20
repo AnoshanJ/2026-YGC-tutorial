@@ -51,7 +51,7 @@ CUSTOMER_SCOPED_TOOLS = frozenset(
         "cancel_order",
         "issue_refund",
         "escalate_to_human",
-        "remember",
+        "append_memory",
         "compact_memory",
     }
 )
@@ -76,7 +76,7 @@ class CustomerIdBindingHook:
             return
         inputs = tool_use["input"]
         proposed = inputs.get("customer_id")
-        if proposed is None:
+        if proposed is None or proposed == "":
             # Early discovery call — model hasn't seen the ID yet. Fill in
             # the trusted value so first-touch tools (lookup_customer, etc.)
             # work without the model having to know the ID.
@@ -104,9 +104,23 @@ class CustomerIdBindingHook:
 
 @dataclass
 class RefundCapHook:
-    """Enforce the agent's per-call refund cap at the harness — defense-in-depth above the MCP server's own check."""
+    """Enforce the agent's per-call refund cap at the harness — defense-in-depth above the MCP server's own check.
+
+    `issue_refund` now takes a `refund_percentage` (a fraction in (0, 1]) and the
+    server multiplies by the order's `total_usd` to get the dollar amount.
+    The hook needs its own `CustomerSupportClient` instance to look up the
+    order's total before it can decide whether the resulting amount blows
+    the cap. The harness and the v2 MCP subprocess each carry their own
+    client; both read the same per-agent disk dir (`mocks/data/<agent_id>/`)
+    so they see the same world.
+    """
 
     refund_cap_usd: float
+    agent_id: str
+
+    def __post_init__(self) -> None:
+        from mocks.client import CustomerSupportClient
+        self._client = CustomerSupportClient(agent_id=self.agent_id)
 
     def register_hooks(self, registry: HookRegistry, **_: object) -> None:
         registry.add_callback(BeforeToolCallEvent, self._enforce_cap)
@@ -115,8 +129,20 @@ class RefundCapHook:
         tool_use = event.tool_use
         if tool_use.get("name") != "issue_refund":
             return
-        amount = tool_use["input"].get("amount_usd")
-        if not isinstance(amount, (int, float)) or amount <= self.refund_cap_usd:
+        inputs = tool_use.get("input") or {}
+        pct = inputs.get("refund_percentage")
+        order_id = inputs.get("order_id")
+        if not isinstance(pct, (int, float)) or pct <= 0 or pct > 1:
+            return  # let the server return the structured invalid_pct error
+        # Refresh the per-instance cache so we see any writes made by the MCP
+        # subprocess this session (issue_refund / cancel_order). Without this,
+        # the cap would be computed against stale totals after a status flip.
+        self._client._reload_cache()
+        order = self._client.get_order(order_id) if order_id else None
+        if order is None:
+            return  # let the server return ownership_mismatch / not_found
+        amount = round(float(pct) * float(order.total_usd), 2)
+        if amount <= self.refund_cap_usd:
             return
         # cancel_tool accepts a string that becomes an error tool-result body.
         # We hand back JSON matching the v2 server's 403 shape so run.py's
@@ -126,8 +152,8 @@ class RefundCapHook:
                 "error": "policy_violation",
                 "code": 403,
                 "detail": (
-                    f"refund of ${amount:.2f} exceeds agent cap of "
-                    f"${self.refund_cap_usd:.2f}"
+                    f"refund of ${amount:.2f} (={pct:.2%} of ${order.total_usd:.2f}) "
+                    f"exceeds agent cap of ${self.refund_cap_usd:.2f}"
                 ),
                 "remediation": "escalate_to_human",
             }

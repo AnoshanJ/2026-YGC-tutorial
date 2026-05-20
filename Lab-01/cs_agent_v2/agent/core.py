@@ -29,7 +29,7 @@ from agent.profile import MCPServerConfig, Profile, load_profile
 # This service's root — cs_agent_v2/. Everything lives below it: skills,
 # policies, memory, mocks, mcp_servers, profile YAML.
 ROOT = Path(__file__).parent.parent
-# Episodic memory directory — written by the `remember` / `compact_memory`
+# Episodic memory directory — written by the `append_memory` / `compact_memory`
 # tools, loaded into the system prompt at agent build. Conversation memory
 # is now just `agent.messages` on the per-customer cached agent (see
 # main.py's `_AGENTS`); no separate session-storage tree needed.
@@ -70,24 +70,39 @@ def make_mcp_client(config: MCPServerConfig) -> MCPClient:
 def _memory_protocol() -> str:
     """Short protocol describing HOW to use episodic memory. Stays in the
     system prompt; the memory BODY itself is injected into the user message
-    via `prepend_memory()` so it doesn't get drowned by instruction text."""
-    return (
-        "You have episodic memory: short notes about prior sessions with each "
-        "customer. When present for the current customer, the notes arrive at "
-        "the top of their first user message of a new session, wrapped in "
-        "`<episodic_memory>…</episodic_memory>` tags.\n\n"
-        "How to use it:\n"
-        "- **Pointers, not data.** Use notes to know what to look up and how to "
-        "frame the reply. Numbers / IDs (refund refs, ticket IDs, amounts) MUST "
-        "be re-verified via the matching read tool before you act on them — the "
-        "audit ledger is the source of truth, memory may be stale.\n"
-        "- **Tone matters.** A note like \"second damaged delivery; tone pointed\" "
-        "should shape your phrasing and your escalation threshold.\n"
-        "- **Close the loop.** Before the turn ends, call `remember(customer_id="
-        "\"\", note=<short>)` with the things tools CAN'T tell the next session: "
-        "open promises, patterns, tone. Strip anything an API would return. "
-        "Keep it small."
-    )
+    via `prepend_memory()` so it doesn't get drowned by instruction text.
+
+    The "write" half is framed as a judgment call (not a routine), with an
+    explicit "reference the DB; don't duplicate" rule, plus a calibrating
+    example using a real observed failure case (note missing order ID +
+    action taken on a gpt-5.4-mini run).
+    """
+    return """\
+## Episodic memory
+
+This customer's per-customer log of what the DB CANNOT store: their situation, your verbal promises, their tone, and patterns you saw across their orders. Critical data — when they return, this is what lets the next agent pick up the thread instead of starting cold.
+
+Prior notes for the current customer arrive at the top of their first user message of a new session, wrapped in `<episodic_memory>…</episodic_memory>` tags. Use them as POINTERS; re-verify any numbers / IDs / statuses with the matching read tool before acting (the ledger is truth; memory may be stale).
+
+### Goes in
+- Situation, not status ("flight tomorrow", not "in_transit_delayed").
+- Verbal promises ("told them 1–2 more days").
+- Tone, 1–2 words ("pressed but reasonable").
+- Patterns across orders ("third damaged delivery to this address").
+
+### Stays out — reference the DB instead
+Refund refs, ticket IDs, order status, tier, policy text. Anything a tool returns. Cite by ID ("see #1234 via get_order"); do NOT copy. Duplication rots.
+
+### When to write
+Ask: **"Would the next agent miss something important if I write nothing right now?"**
+
+- Yes → call `append_memory(customer_id="", note=...)` BEFORE your reply. One line, packing: order ID, action / promise, tone, pattern (if any).
+- No → skip. Info-only turns need no note.
+
+### Example
+✅ "#1234 late, flight tomorrow; issued $10 shipping_delay credit. Tone: pressed but reasonable."
+❌ "Urgent travel deadline on late-order; flying tomorrow. Tone: pressed but reasonable."
+(Missing order ID + action — useless to the next agent.)"""
 
 
 def prepend_memory(
@@ -122,13 +137,22 @@ def prepend_memory(
     )
 
 
-def _build_instructions(profile: Profile) -> str:
-    """Format `profile.system_prompt`; append the memory protocol + skills header."""
+def _build_instructions(
+    profile: Profile,
+    memory_section: str = "",
+    skills_section: str = "",
+) -> str:
+    """Format `profile.system_prompt`; append any provided sections in order.
+
+    The caller decides whether each section is included — `build_agent` builds
+    the section string alongside the matching plugin/tool decision so the
+    enable condition lives in one place per feature.
+    """
     base = profile.system_prompt.format(**vars(profile))
-    if profile.memory.episodic.enabled:
-        base += "\n\n## Episodic memory\n\n" + _memory_protocol()
-    if profile.skills_dir:
-        base += "\n\n## Available skills\n\n"
+    if memory_section:
+        base += "\n\n" + memory_section
+    if skills_section:
+        base += "\n\n" + skills_section
     return base
 
 
@@ -160,34 +184,36 @@ def build_agent(
     profile: Profile | None = None,
     customer_id: str | None = None,
 ) -> Agent:
-    """Build the agent for one customer. `customer_id` is needed for episodic memory and hook binding."""
+    """Build the agent for one customer. `customer_id` is needed for episodic
+    memory and hook binding. UI toggle overrides are baked into `profile`
+    upstream via `apply_overrides` — this function just reads the profile."""
     if profile is None:
         profile = load_profile()
-
-    # --- Episodic memory: the body is injected into the first user message
-    # by main.py via `prepend_memory(...)` once the cached Agent is fresh.
-    # All that lives in the system prompt is the short protocol added by
-    # `_build_instructions` when episodic.enabled is true.
 
     # --- Tools: every MCP server in the YAML, passed as ToolProviders.
     # Strands handles subprocess lifecycle — see make_mcp_client docstring.
     mcp_clients = [make_mcp_client(cfg) for cfg in profile.mcp_servers]
 
-    # --- Local tools: episodic memory writes. Live in-process with the agent
-    # because they're session-scoped state the agent owns end-to-end — no
-    # team / deployment boundary to cross (README §2b's "tools that stay
-    # local" rule). Only attached when episodic memory is enabled, so the
-    # tool catalog matches what's documented in the system prompt.
+    # --- Episodic memory: when enabled, attach the in-process write tools AND
+    # include the protocol in the system prompt. Both together or neither —
+    # the tool catalog must match what the prompt describes. The memory BODY
+    # itself is injected into the first user message by main.py via
+    # `prepend_memory(...)` once the cached Agent is fresh.
     local_tools: list = []
+    memory_section = ""
     if profile.memory.episodic.enabled:
-        local_tools.extend([memory.remember, memory.compact_memory])
+        memory_section = "## Episodic memory\n\n" + _memory_protocol()
+        local_tools.extend([memory.append_memory, memory.compact_memory])
 
     # --- Skills: AgentSkills plugin auto-discovers SKILL.md under skills_dir,
-    # injects the catalog into the system prompt, and registers a `skills`
-    # loader tool the agent calls to read a skill body on demand.
+    # injects the catalog into the system prompt under "## Available skills",
+    # and registers a `skills` loader tool. When disabled (skills_dir is None),
+    # none of that happens.
     plugins: list = []
+    skills_section = ""
     skills_dir = _resolve_skills_dir(profile)
     if skills_dir:
+        skills_section = "## Available skills\n\n"
         plugins.append(AgentSkills(skills=[str(skills_dir)]))
 
     # --- Session memory: `agent.messages` on the returned Agent, capped by
@@ -210,14 +236,19 @@ def build_agent(
     # prompt-injected agent cannot exceed its cap. The v2 MCP server has a
     # matching server-side check as defense in depth — the hook just makes
     # sure the bad call never reaches the wire.
-    hooks_.append(RefundCapHook(refund_cap_usd=profile.refund_cap_usd))
+    hooks_.append(
+        RefundCapHook(
+            refund_cap_usd=profile.refund_cap_usd,
+            agent_id=profile.agent_id,
+        )
+    )
 
     agent = Agent(
         agent_id=profile.agent_id,
         name=profile.name,
         description=f"Customer support agent. Refund authority up to ${profile.refund_cap_usd:.2f}.",
         model=OpenAIModel(model_id=profile.model),
-        system_prompt=_build_instructions(profile),
+        system_prompt=_build_instructions(profile, memory_section, skills_section),
         tools=[*mcp_clients, *local_tools],
         plugins=plugins,
         hooks=hooks_,

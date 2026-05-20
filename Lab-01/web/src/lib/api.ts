@@ -23,7 +23,7 @@ export const SUPPORTED_MODELS = [
   "gpt-5-mini",
 ] as const;
 export type SupportedModel = (typeof SUPPORTED_MODELS)[number];
-export const DEFAULT_MODEL: SupportedModel = "gpt-5-mini";
+export const DEFAULT_MODEL: SupportedModel = "gpt-5.4-mini";
 
 export interface AgentService {
   variant: AgentVariant;
@@ -51,6 +51,12 @@ export interface RunArgs {
   prompt: string;
   customer_id: string;
   model?: string;
+  // v2 feature toggles. Ignored by v1.
+  skills_enabled?: boolean;
+  episodic_enabled?: boolean;
+  // `planner_enabled` is per-request — no agent rebuild needed, so it can
+  // flip mid-session unlike skills/episodic.
+  planner_enabled?: boolean;
   signal?: AbortSignal;
   onEvent: (ev: AgentEvent) => void;
 }
@@ -64,6 +70,15 @@ export async function runAgent(svc: AgentService, args: RunArgs): Promise<void> 
       prompt: args.prompt,
       customer_id: args.customer_id,
       ...(args.model ? { model: args.model } : {}),
+      ...(args.skills_enabled !== undefined
+        ? { skills_enabled: args.skills_enabled }
+        : {}),
+      ...(args.episodic_enabled !== undefined
+        ? { episodic_enabled: args.episodic_enabled }
+        : {}),
+      ...(args.planner_enabled !== undefined
+        ? { planner_enabled: args.planner_enabled }
+        : {}),
     }),
     signal: args.signal,
   });
@@ -146,6 +161,28 @@ export async function endSession(svc: AgentService, customerId: string): Promise
   }
 }
 
+/** Episodic memory file contents for one customer. */
+export interface AgentMemory {
+  customer_id: string;
+  exists: boolean;
+  content: string;
+}
+
+/** GET /api/memory — the customer's episodic-memory file. v2 only; v1
+ *  has no episodic memory. Returns `exists: false` with an empty
+ *  `content` when no file has been written yet. */
+export async function fetchMemory(
+  svc: AgentService,
+  customerId: string,
+): Promise<AgentMemory> {
+  const qs = `?customer_id=${encodeURIComponent(customerId)}`;
+  const response = await fetch(`${svc.baseUrl}/api/memory${qs}`);
+  if (!response.ok) {
+    throw new Error(`${svc.variant} /api/memory returned ${response.status}`);
+  }
+  return (await response.json()) as AgentMemory;
+}
+
 /** One tool entry as returned by the agent's tool registry. */
 export interface AgentTool {
   name: string;
@@ -159,9 +196,22 @@ export interface AgentTool {
 }
 
 /** GET /api/tools — list of tools this agent has registered.
- *  Static for the server's lifetime; UI fetches once per panel. */
-export async function fetchTools(svc: AgentService): Promise<AgentTool[]> {
-  const response = await fetch(`${svc.baseUrl}/api/tools`);
+ *  v2 honors `skills_enabled` / `episodic_enabled` query params so the
+ *  drawer matches the live tool set for the current toggle state. v1
+ *  ignores them. UI refetches whenever the toggles flip. */
+export async function fetchTools(
+  svc: AgentService,
+  flags?: { skills_enabled?: boolean; episodic_enabled?: boolean },
+): Promise<AgentTool[]> {
+  const params = new URLSearchParams();
+  if (flags?.skills_enabled !== undefined) {
+    params.set("skills_enabled", String(flags.skills_enabled));
+  }
+  if (flags?.episodic_enabled !== undefined) {
+    params.set("episodic_enabled", String(flags.episodic_enabled));
+  }
+  const qs = params.toString() ? `?${params}` : "";
+  const response = await fetch(`${svc.baseUrl}/api/tools${qs}`);
   if (!response.ok) {
     throw new Error(`${svc.variant} /api/tools returned ${response.status}`);
   }

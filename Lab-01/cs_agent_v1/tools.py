@@ -35,25 +35,13 @@ from mocks.client import CustomerSupportClient
 # write tools stamp onto ledger entries, and the cap is a number
 # checked inline below. Both come from `config.py` (env-overridable).
 
-_client = CustomerSupportClient()
+_client = CustomerSupportClient(agent_id=AGENT_ID)
 
 
 def reset_state() -> None:
     """Wipe the in-memory mock backend and reload seeds. Called by
     main.py's /api/reset endpoint."""
     _client.reset()
-
-
-def _can_refund(amount_usd: float) -> tuple[bool, str | None]:
-    """Naive cap gate. Returns (allowed, reason_if_not)."""
-    if amount_usd <= 0:
-        return False, f"refund amount must be positive, got ${amount_usd:.2f}"
-    if amount_usd > REFUND_CAP_USD:
-        return False, (
-            f"refund of ${amount_usd:.2f} exceeds agent cap of "
-            f"${REFUND_CAP_USD:.2f}"
-        )
-    return True, None
 
 
 # === Anti-pattern 1: Overlapping / similar descriptions ====================
@@ -90,15 +78,23 @@ def get_customer_orders(customer_id: str) -> list[dict]:
 
 # === Anti-pattern 2: Bad input schema — overloaded "god" tool =============
 # `modify_order` takes flat optional params for three unrelated operations
-# — cancel (status+reason), refund (refund_usd+reason), and address change
-# (shipping_address) — all behind one tool. Typed and clean-looking on the
-# signature, but the tool guesses which operation the caller meant from
-# which subset of params is set. Pass `status="cancelled"` AND
-# `refund_usd=50` and only one wins silently; pass nothing actionable and
-# the call no-ops with a free-text "nothing to do". Stripe's
-# `SubscriptionUpdate`, Salesforce's `Account update`, any "PATCH
-# /resource" with 30 optional fields — realistic shape, terrible for an
-# LLM that has to pick a valid combination from the schema alone.
+# — cancel (status+reason), refund (refund_percentage+reason), and address
+# change (shipping_address) — all behind one tool. Typed and clean-looking
+# on the signature, but the tool guesses which operation the caller meant
+# from which subset of params is set. Pass `status="cancelled"` AND
+# `refund_percentage=0.9` and only one wins silently; pass nothing
+# actionable and the call no-ops with a free-text "nothing to do".
+# Stripe's `SubscriptionUpdate`, Salesforce's `Account update`, any
+# "PATCH /resource" with 30 optional fields — realistic shape, terrible
+# for an LLM that has to pick a valid combination from the schema alone.
+#
+# The refund branch takes `refund_percentage` (a fraction of the order's
+# total). The docstring is silent on how to choose the percentage — no
+# mention of the `refund_calculation` policy, no mention of subtracting
+# prior refunds on the same order. An LLM with no skill / no policy
+# nudge typically passes the category percentage from memory and
+# over-refunds whenever a prior credit (e.g. shipping-delay) already
+# exists on the order.
 
 
 @tool
@@ -106,7 +102,7 @@ def modify_order(
     order_id: str,
     status: str | None = None,
     reason: str | None = None,
-    refund_usd: float | None = None,
+    refund_percentage: float | None = None,
     shipping_address: str | None = None,
 ) -> dict:
     """Modify an order: cancel, refund, or update shipping address."""
@@ -118,22 +114,21 @@ def modify_order(
         ref = _client.cancel_order(order_id, reason or "no reason", AGENT_ID)
         return {"status": "ok", "ref": ref}
 
-    if refund_usd is not None:
-        amt = float(refund_usd)
-        ok, why = _can_refund(amt)
-        if not ok:
-            # AP4: free-text `message`, no `code`, no `remediation`.
-            # A persuaded agent often retries with a smaller amount,
-            # which is exactly the refund-split policy violation.
-            return {"status": "failed", "message": why}
+    if refund_percentage is not None:
+        # AP2 + AP4: docstring is silent on how to pick the percentage. No
+        # mention of the refund_calculation policy, no mention of subtracting
+        # prior refunds. Agent typically passes the category percentage from
+        # memory and over-refunds when a shipping-delay credit already exists.
+        amt = float(refund_percentage) * float(o.total_usd)
         ref = _client.issue_refund(
             order_id,
             o.customer_id,
             amt,
             reason or "refund",
             AGENT_ID,
+            refund_percentage=float(refund_percentage),
         )
-        return {"status": "ok", "ref": ref}
+        return {"status": "ok", "ref": ref, "amount_usd": amt}
 
     if shipping_address is not None:
         ref = _client.update_shipping_address(

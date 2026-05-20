@@ -1,40 +1,54 @@
 ---
 name: handle-cancellation
-description: Load this right BEFORE calling cancel_order — once you have already confirmed the order has not yet shipped and the customer wants to abandon the order (not just modify it or refund it post-delivery). cancel_order only works for orders in placed or preparing status; shipped orders need a return flow instead, and address-only changes belong with handle-address-change. The skill orchestrates the status branch, refund coordination if the customer was already charged, and audit confirmation with a reference number.
+description: Load before cancelling an order — how to cancel, then figure out the right refund net of anything already credited.
 ---
 
 # handle-cancellation
 
-Cancellation flips the order status to `cancelled` and stops fulfillment. It is a one-way write — get the diagnosis right BEFORE loading this skill. Only call `cancel_order` when the customer explicitly wants to abandon the order, not when they want it modified (`handle-address-change`), delayed (no action), or refunded post-delivery (`handle-refund` after a return).
+Cancellation flips an order's status to `cancelled` AND usually owes the customer money back. The refund is a SEPARATE write — `cancel_order` does not auto-refund — and the right amount depends on policy AND on what's already been refunded on this order. Don't improvise either piece.
+
+**Ordering rule — cancel BEFORE refund, never the other way.** Refunding first and then cancelling leaves a window where you've paid the customer back on a still-active order; if the cancel then rejects (e.g. the warehouse shipped it between your calls), you have to reverse the refund and explain the mess. The pre-cancel checks (status, refund history, policy) are all read-only; only `cancel_order` flips state, and only after that succeeds do you call `issue_refund`.
 
 ## High-level flow
 
-1. **Look up the order** — `get_order(order_id)`. The harness binds the customer; the server returns `ownership_mismatch` (code 403) if the order belongs to someone else — do NOT retry.
-2. **Branch on order status:**
-   - `placed` or `preparing` → cancellation is allowed; continue to step 3.
-   - `shipped` / `in_transit_delayed` / `delivered` / `delivered_damaged` → cancellation is NOT allowed. The tool will return `order_already_shipped`. Redirect — for shipped-but-undelivered, the carrier may accept a redirect or refusal; for delivered, this is a return (consult `return_window` policy via `search_policy_kb`).
-3. **Check whether the customer was already charged** — for unshipped orders that are `preparing`, this is usually yes. If yes, a refund will be needed alongside the cancellation.
-4. **Execute the cancellation** — `cancel_order(order_id, reason)`. Use a specific reason (e.g. `customer_request`, `duplicate_order`, `wrong_item_ordered`) — it is audit-logged.
-5. **Issue the refund if step 3 said yes** — load `handle-refund` and follow it. The refund follows the cancel in the ledger.
-6. **Confirm in the reply** — cancel reference (`cancel_xxxx`); refund reference (`refund_xxxx`) if applicable; expected timing for any payment reversal.
+1. **Look up the order** — `get_order(order_id)`. Note `total_usd` and `status`. On `ownership_mismatch` (code 403), do NOT retry; the order isn't theirs.
+2. **Check status.** If the order has already shipped (any status beyond `placed` / `preparing`), cancellation is not allowed. Consult `address_change` policy for the carrier-redirect path; for delivered orders consult `return_window` policy and treat as a return, not a cancel. Stop here.
+3. **Check refund history** — `get_refund_history(customer_id)`. Filter entries by THIS `order_id` and SUM their `refund_percentage` values — that's `already_refunded_pct` (a fraction). No dollar-math: the ledger records the fraction each refund used.
+4. **Look up the refund-calculation policy** — `search_policy_kb("cancellation refund percentage")` or similar. Get the cancellation percentage (currently 0.90 for placed/preparing — but read, don't memorize).
+5. **Compute net refund percentage:**
 
-## Decision branches
+       net_pct = cancellation_pct − already_refunded_pct
 
-- **Order shipped + customer wants to cancel** → cannot. Explain carrier-redirect / return-on-arrival path. Do NOT attempt `cancel_order` — the status check is server-side.
-- **Order preparing + customer was charged** → `cancel_order` first, then `handle-refund`. Cite both refs.
-- **Order placed + not yet charged** → `cancel_order` alone, no refund needed.
-- **Customer wants to cancel just to fix the address** → suggest `handle-address-change` instead; it's faster than cancel + re-order.
+   If `net_pct <= 0`, do NOT call `issue_refund` — the customer has already been refunded everything policy allows. Cancel only, then explain in the reply.
+6. **Cancel** — `cancel_order(order_id, reason)` with a specific reason (audit-logged). On success you'll get a cancel ref.
+7. **Refund the net** — `issue_refund(order_id, refund_percentage=net_pct, reason="cancel_net_of_prior")`. The server multiplies by `total_usd` and logs both pct and dollar amount. If the call returns a `policy_violation` 403 (over cap), DO NOT split — escalate the full case.
+8. **Confirm in the reply** — cancel ref, refund ref + dollar amount, what's deducted (prior credit) and why, payment-reversal timing.
 
 ## Anti-patterns
 
-- ❌ Calling `cancel_order` before checking status — you'll get `order_already_shipped` and waste a turn.
-- ❌ Retrying `cancel_order` on a shipped order with a different reason — the check is status-based, not reason-based.
-- ❌ Issuing a refund before the cancel for an unshipped order — out of order; cancel first, then refund.
-- ❌ Forgetting to confirm the cancel ref in the reply — the customer needs it for their records.
+- ❌ Calling `cancel_order` before checking status — wastes a turn on `order_already_shipped`.
+- ❌ Issuing the full cancellation percentage without subtracting prior refunds — over-pays the customer; audit will flag it.
+- ❌ Skipping the refund-history check because the customer didn't mention a prior credit — they often forget; the ledger is the source of truth.
+- ❌ Picking 90% from this skill instead of `refund_calculation` policy — percentages change; the policy is authoritative.
+- ❌ **Calling `issue_refund` before `cancel_order` succeeds** — wrong order. If the cancel then rejects, you've paid out on a live order. Cancel first, refund second.
+- ❌ Cancelling and then forgetting to refund — the customer never gets their money. The `cancel_order` response carries a `next_step` reminder; act on it.
+- ❌ Calling `issue_refund` twice to split a single net refund — that's a `refund_authority` violation.
+- ❌ Treating an address-fix request as a cancel — redirect to address change instead; it's faster.
 
-## Related skills and tools
+## Worked example
 
-- `cancel_order(order_id, reason)` — the write.
-- `handle-refund` — load this AFTER `cancel_order` if the customer was already charged.
-- `handle-address-change` — if the cancel was really a modification request, redirect there instead.
-- `return_window` policy — for delivered orders the customer wants to "cancel" (it is a return, not a cancel).
+Order #1241, `total_usd = $100`, status `preparing`. `get_refund_history` shows one prior refund on #1241 with `refund_percentage: 0.10` (reason `shipping_delay_credit`).
+
+- Cancellation percentage from policy: **0.90**.
+- `already_refunded_pct = 0.10` (the one prior entry).
+- `net_pct = 0.90 − 0.10 = 0.80` → call `issue_refund(order_id="1241", refund_percentage=0.80, reason="cancel_net_of_prior")`.
+- Server multiplies by `total_usd = $100`, logs `$80` and `refund_percentage: 0.80`. Total fraction refunded on #1241 now sums to `1.00 × cancellation_pct` = `0.90` = the cancellation entitlement.
+
+## Related
+
+- `cancel_order(order_id, reason)` — flips status, no refund.
+- `issue_refund(order_id, refund_percentage, reason)` — the refund write. See `handle-refund` for the broader refund flow.
+- `refund_calculation` policy — percentages by category, the net-refund formula.
+- `refund_authority` policy — the cap and the anti-split rule.
+- `address_change` policy — the carrier-redirect path for shipped orders.
+- `return_window` policy — delivered orders the customer wants to "cancel".

@@ -5,7 +5,7 @@ model, tool set, skill directory, MCP servers, memory config, refund cap.
 `agent/core.py` is a loader on top of this.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import yaml
@@ -37,6 +37,15 @@ class MemoryConfig:
 
 
 @dataclass
+class PlannerConfig:
+    # When enabled, every /api/run kicks off a small non-streaming LLM call
+    # BEFORE the main agent to produce a <plan> block (intent, approach,
+    # info_needed, skills, policies). The plan is prepended to the user
+    # message. See `agent/planner.py`.
+    enabled: bool = False
+
+
+@dataclass
 class MCPServerConfig:
     name: str
     command: str
@@ -64,7 +73,43 @@ class Profile:
     skills_dir: str | None
     mcp_servers: list[MCPServerConfig]
     memory: MemoryConfig
+    planner: PlannerConfig
     refund_cap_usd: float
+
+
+def apply_overrides(
+    profile: Profile,
+    skills_enabled: bool | None = None,
+    episodic_enabled: bool | None = None,
+    planner_enabled: bool | None = None,
+) -> Profile:
+    """Return a Profile copy with UI toggle overrides applied. `None` keeps
+    the YAML default. Disabling skills wipes `skills_dir`; disabling episodic
+    flips `memory.episodic.enabled`; toggling the planner flips
+    `planner.enabled` (a per-request decision — no agent rebuild needed).
+    The returned Profile is the single source of truth for `build_agent`
+    and the per-request planner gate — no extra flag plumbing required."""
+    if (
+        skills_enabled is None
+        and episodic_enabled is None
+        and planner_enabled is None
+    ):
+        return profile
+
+    new_skills_dir = profile.skills_dir if skills_enabled is not False else None
+    new_episodic = profile.memory.episodic
+    if episodic_enabled is not None:
+        new_episodic = replace(profile.memory.episodic, enabled=episodic_enabled)
+    new_planner = profile.planner
+    if planner_enabled is not None:
+        new_planner = replace(profile.planner, enabled=planner_enabled)
+
+    return replace(
+        profile,
+        skills_dir=new_skills_dir,
+        memory=replace(profile.memory, episodic=new_episodic),
+        planner=new_planner,
+    )
 
 
 def load_profile(path: Path = PROFILE_PATH) -> Profile:
@@ -82,6 +127,12 @@ def load_profile(path: Path = PROFILE_PATH) -> Profile:
         episodic_section = {"enabled": episodic_section}
     elif episodic_section is None:
         episodic_section = {}
+    planner_section = raw.get("planner", {})
+    # Tolerate the shorthand `planner: true` / `planner: false`.
+    if isinstance(planner_section, bool):
+        planner_section = {"enabled": planner_section}
+    elif planner_section is None:
+        planner_section = {}
     mcp_section = raw.get("mcp_servers") or []
 
     mcp_servers = [
@@ -108,6 +159,9 @@ def load_profile(path: Path = PROFILE_PATH) -> Profile:
                 enabled=bool(episodic_section.get("enabled", False)),
                 compact_threshold=int(episodic_section.get("compact_threshold", 4000)),
             ),
+        ),
+        planner=PlannerConfig(
+            enabled=bool(planner_section.get("enabled", False)),
         ),
         refund_cap_usd=float(raw.get("refund_cap_usd", 200.0)),
     )

@@ -1,9 +1,10 @@
-import { Loader2, MessageSquare, Power } from "lucide-react";
+import { BookOpen, Brain, ListChecks, Loader2, MessageSquare, Power } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
 import type { AgentService, AgentTool } from "@/lib/api";
 import type { AgentState } from "@/lib/types";
+import { MemoryDrawer } from "./MemoryDrawer";
 import { ToolsDrawer } from "./ToolsDrawer";
 import { TurnCard } from "./TurnCard";
 
@@ -14,6 +15,23 @@ interface Props {
   toolsLoading: boolean;
   toolsError: string | null;
   onToggleEnabled: () => void;
+  // v2-only: feature toggles. Undefined for v1 — the row doesn't render.
+  skillsEnabled?: boolean;
+  episodicEnabled?: boolean;
+  // `plannerEnabled` is per-request (no agent rebuild), so it can flip
+  // freely without the confirm-dialog dance the other two need.
+  plannerEnabled?: boolean;
+  onToggleSkills?: () => void;
+  onToggleEpisodic?: () => void;
+  onTogglePlanner?: () => void;
+  // Disables the feature toggles while a chat is in-flight (same as the
+  // top-bar reset button).
+  featuresDisabled?: boolean;
+  // v2-only: identifies whose memory file to read, and a bump counter the
+  // parent increments after events that may have modified the file. Both
+  // are required when `episodicEnabled` is true; otherwise unused.
+  customerId?: string;
+  memoryRefreshKey?: number;
 }
 
 export function AgentPanel({
@@ -23,6 +41,15 @@ export function AgentPanel({
   toolsLoading,
   toolsError,
   onToggleEnabled,
+  skillsEnabled,
+  episodicEnabled,
+  plannerEnabled,
+  onToggleSkills,
+  onToggleEpisodic,
+  onTogglePlanner,
+  featuresDisabled,
+  customerId,
+  memoryRefreshKey,
 }: Props) {
   const lastTurn = state.turns[state.turns.length - 1];
   const status = lastTurn?.status ?? "idle";
@@ -70,7 +97,7 @@ export function AgentPanel({
             {service.caption} · :{new URL(service.baseUrl).port}
           </div>
         </div>
-        <div className="ml-auto flex items-center gap-2">
+        <div className="ml-auto flex items-center gap-1.5">
           {isRunning && (
             <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
           )}
@@ -78,6 +105,36 @@ export function AgentPanel({
             <Badge variant={statusVariant} className="capitalize">
               {status}
             </Badge>
+          )}
+          {/* v2-only feature toggles. Flipping either restarts the v2 session
+              (agent rebuild — skills/episodic memory are baked at build time).
+              App.tsx confirms the destruction before calling the handler. */}
+          {onToggleSkills && (
+            <FeatureToggle
+              label="skills"
+              icon={<BookOpen className="h-3 w-3" />}
+              enabled={!!skillsEnabled}
+              onClick={onToggleSkills}
+              disabled={featuresDisabled}
+            />
+          )}
+          {onToggleEpisodic && (
+            <FeatureToggle
+              label="memory"
+              icon={<Brain className="h-3 w-3" />}
+              enabled={!!episodicEnabled}
+              onClick={onToggleEpisodic}
+              disabled={featuresDisabled}
+            />
+          )}
+          {onTogglePlanner && (
+            <FeatureToggle
+              label="planner"
+              icon={<ListChecks className="h-3 w-3" />}
+              enabled={!!plannerEnabled}
+              onClick={onTogglePlanner}
+              disabled={featuresDisabled}
+            />
           )}
           <label
             className={cn(
@@ -107,6 +164,17 @@ export function AgentPanel({
         loading={toolsLoading}
         error={toolsError ?? undefined}
       />
+
+      {/* Episodic-memory file viewer — only when the v2 feature is on.
+          Lets the audience inspect what the agent committed to disk
+          across the next-session boundary. */}
+      {episodicEnabled && customerId && (
+        <MemoryDrawer
+          service={service}
+          customerId={customerId}
+          refreshKey={memoryRefreshKey ?? 0}
+        />
+      )}
 
       {/* Body — scrolling thread of turns */}
       <div className="scroll-thin flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-4">
@@ -141,5 +209,41 @@ export function AgentPanel({
         )}
       </div>
     </section>
+  );
+}
+
+interface FeatureToggleProps {
+  label: string;
+  icon: React.ReactNode;
+  enabled: boolean;
+  onClick: () => void;
+  disabled?: boolean;
+}
+
+function FeatureToggle({ label, icon, enabled, onClick, disabled }: FeatureToggleProps) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      title={
+        disabled
+          ? "Wait for the current turn to finish"
+          : `Click to turn ${enabled ? "off" : "on"} (triggers a full reset)`
+      }
+      className={cn(
+        "inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs transition-colors",
+        "disabled:cursor-not-allowed disabled:opacity-50",
+        enabled
+          ? "border-transparent bg-secondary text-secondary-foreground hover:bg-secondary/80"
+          : "border-input bg-background text-muted-foreground hover:bg-accent",
+      )}
+    >
+      {icon}
+      <span className="font-medium">{label}</span>
+      <span className="ml-0.5 text-[10px] uppercase tracking-wider opacity-70">
+        {enabled ? "on" : "off"}
+      </span>
+    </button>
   );
 }

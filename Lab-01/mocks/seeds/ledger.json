@@ -5,6 +5,7 @@
     "order_id": "2210",
     "customer_id": "cust_002",
     "amount_usd": 58.00,
+    "refund_percentage": 1.0,
     "reason": "damaged_item_full_refund",
     "actor_agent_id": "cs-agent-v0",
     "timestamp": "2026-05-01T10:05:00Z"
@@ -19,5 +20,16 @@
     "status": "open",
     "actor_agent_id": "cs-agent-v0",
     "timestamp": "2026-05-01T10:10:00Z"
+  },
+  {
+    "kind": "refund",
+    "ref": "refund_0002",
+    "order_id": "1241",
+    "customer_id": "cust_001",
+    "amount_usd": 10.00,
+    "refund_percentage": 0.10,
+    "reason": "shipping_delay_credit",
+    "actor_agent_id": "cs-agent-v0",
+    "timestamp": "2026-05-14T09:00:00Z"
   }
 ]

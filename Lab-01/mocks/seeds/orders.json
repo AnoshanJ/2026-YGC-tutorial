@@ -47,6 +47,46 @@
     "damaged": true,
     "payment_method": "VISA-4827"
   },
+  "1240": {
+    "order_id": "1240",
+    "customer_id": "cust_001",
+    "status": "placed",
+    "placed": "2026-05-05",
+    "items": ["Bluetooth speaker (compact, navy) — backorder, restock ETA 2026-05-22"],
+    "total_usd": 49.00,
+    "shipping_address": "221 Bakerstraße, 10117 Berlin",
+    "delivery_days_late": 0,
+    "damaged": false,
+    "payment_method": "VISA-4827"
+  },
+  "1241": {
+    "order_id": "1241",
+    "customer_id": "cust_001",
+    "status": "preparing",
+    "placed": "2026-05-06",
+    "items": ["Premium insulated water bottle set (1 L bottle + travel mug, matte black)"],
+    "total_usd": 100.00,
+    "shipping_address": "221 Bakerstraße, 10117 Berlin",
+    "estimated_delivery": "2026-05-21",
+    "delivery_days_late": 0,
+    "damaged": false,
+    "payment_method": "VISA-4827"
+  },
+  "1242": {
+    "order_id": "1242",
+    "customer_id": "cust_001",
+    "status": "in_transit",
+    "placed": "2026-05-17",
+    "items": ["Universal travel adapter (EU/US/UK, 65W USB-C)"],
+    "total_usd": 35.00,
+    "shipping_address": "221 Bakerstraße, 10117 Berlin",
+    "carrier": "DHL",
+    "tracking_id": "DHL-EXP-9821-4452-0117",
+    "estimated_delivery": "2026-05-19",
+    "delivery_days_late": 0,
+    "damaged": false,
+    "payment_method": "VISA-4827"
+  },
   "2210": {
     "order_id": "2210",
     "customer_id": "cust_002",

@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { RichText } from "@/components/RichText";
 import { cn } from "@/lib/utils";
 import {
   scenariosBySection,
@@ -108,7 +109,7 @@ function ScenarioCard({ scenario, disabled, onPrompt }: ScenarioCardProps) {
           </Badge>
         )}
       </div>
-      <div className="mt-1 text-muted-foreground">{scenario.goal}</div>
+      <RichText text={scenario.goal} className="mt-1 text-muted-foreground" />
       <div className="mt-2 flex flex-col gap-1.5">
         {scenario.prompts.map((p, i) => (
           <button
@@ -128,9 +129,10 @@ function ScenarioCard({ scenario, disabled, onPrompt }: ScenarioCardProps) {
             )}
             <div className="line-clamp-3 whitespace-pre-wrap leading-relaxed">{p.text}</div>
             {p.note && (
-              <div className="mt-1 text-[10px] italic text-muted-foreground">
-                {p.note}
-              </div>
+              <RichText
+                text={p.note}
+                className="mt-1 text-[10px] italic text-muted-foreground"
+              />
             )}
           </button>
         ))}

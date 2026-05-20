@@ -22,6 +22,7 @@ import {
 } from "@/lib/types";
 import { AgentPanel } from "@/components/AgentPanel";
 import { Composer } from "@/components/Composer";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { ScenariosPanel } from "@/components/ScenariosPanel";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { Button } from "@/components/ui/button";
@@ -48,10 +49,32 @@ export default function App() {
   const [scenariosOpen, setScenariosOpen] = useState(false);
   const [v1, setV1] = useState<AgentState>(emptyAgentState);
   const [v2, setV2] = useState<AgentState>(emptyAgentState);
+  // v2-only feature toggles. `skills` / `episodic` default OFF so the v2
+  // panel starts as a bare-bones agent; the presenter flips them on during
+  // the demo to show the lift each feature provides. Flipping skills or
+  // episodic is destructive (rebuilds the agent) and triggers a full v2
+  // reset; `planner` is a per-request decision (the planner is a separate
+  // LLM call, not part of the agent build) and flips freely without reset.
+  const [v2SkillsEnabled, setV2SkillsEnabled] = useState(false);
+  const [v2EpisodicEnabled, setV2EpisodicEnabled] = useState(false);
+  const [v2PlannerEnabled, setV2PlannerEnabled] = useState(false);
+  // Holds the toggle the user is mid-flipping while the confirm dialog is
+  // up. Cleared on confirm or cancel. Only `skills` / `episodic` need this
+  // — planner has no rebuild and skips the dialog entirely.
+  const [pendingV2Toggle, setPendingV2Toggle] = useState<
+    { feature: "skills" | "episodic"; next: boolean } | null
+  >(null);
   // Tool catalog per agent — fetched once on mount. Tools don't change
   // between requests, so we don't refetch on send/reset.
   const [v1Tools, setV1Tools] = useState<AgentTool[]>([]);
   const [v2Tools, setV2Tools] = useState<AgentTool[]>([]);
+  // Counter the MemoryDrawer watches to know when to refetch the file.
+  // Bumped after a v2 turn finishes, after reset, and after next-session.
+  const [v2MemoryRefreshKey, setV2MemoryRefreshKey] = useState(0);
+  const bumpV2Memory = useCallback(
+    () => setV2MemoryRefreshKey((k) => k + 1),
+    [],
+  );
   const [v1ToolsLoading, setV1ToolsLoading] = useState(true);
   const [v2ToolsLoading, setV2ToolsLoading] = useState(true);
   const [v1ToolsError, setV1ToolsError] = useState<string | null>(null);
@@ -59,38 +82,54 @@ export default function App() {
   const [resetMsg, setResetMsg] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
-  // Fetch tool catalogs once. v2 spawns its MCP subprocesses on first
-  // /api/tools call — that one-time spawn cost lands at page load
-  // instead of mid-demo.
+  // v1 tools are static — fetch once at mount.
   useEffect(() => {
     let cancelled = false;
-    const load = (
-      svc: AgentService,
-      setTools: (t: AgentTool[]) => void,
-      setLoading: (b: boolean) => void,
-      setError: (e: string | null) => void,
-    ) => {
-      fetchTools(svc)
-        .then((tools) => {
-          if (cancelled) return;
-          setTools(tools);
-          setError(null);
-        })
-        .catch((err) => {
-          if (cancelled) return;
-          setError(err instanceof Error ? err.message : String(err));
-        })
-        .finally(() => {
-          if (cancelled) return;
-          setLoading(false);
-        });
-    };
-    load(AGENTS.v1, setV1Tools, setV1ToolsLoading, setV1ToolsError);
-    load(AGENTS.v2, setV2Tools, setV2ToolsLoading, setV2ToolsError);
+    fetchTools(AGENTS.v1)
+      .then((tools) => {
+        if (cancelled) return;
+        setV1Tools(tools);
+        setV1ToolsError(null);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setV1ToolsError(err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => {
+        if (cancelled) return;
+        setV1ToolsLoading(false);
+      });
     return () => {
       cancelled = true;
     };
   }, []);
+
+  // v2 tools depend on the feature toggles — refetch whenever they flip so
+  // the drawer matches what the agent actually has registered.
+  useEffect(() => {
+    let cancelled = false;
+    setV2ToolsLoading(true);
+    fetchTools(AGENTS.v2, {
+      skills_enabled: v2SkillsEnabled,
+      episodic_enabled: v2EpisodicEnabled,
+    })
+      .then((tools) => {
+        if (cancelled) return;
+        setV2Tools(tools);
+        setV2ToolsError(null);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setV2ToolsError(err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => {
+        if (cancelled) return;
+        setV2ToolsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [v2SkillsEnabled, v2EpisodicEnabled]);
 
   const setters = useMemo(
     (): Record<AgentVariant, React.Dispatch<React.SetStateAction<AgentState>>> => ({
@@ -124,6 +163,9 @@ export default function App() {
           break;
         case "user_message":
           updateTurn(variant, turnId, (t) => ({ ...t, framed_message: ev.content }));
+          break;
+        case "plan":
+          updateTurn(variant, turnId, (t) => ({ ...t, plan: ev.content }));
           break;
         case "tool_call":
           updateTurn(variant, turnId, (t) => ({
@@ -166,6 +208,9 @@ export default function App() {
             status: "done",
             final_reply: ev.final_reply || t.streaming_reply,
           }));
+          // The v2 agent may have appended to its episodic memory file
+          // during this turn; nudge the MemoryDrawer to refetch.
+          if (variant === "v2") bumpV2Memory();
           break;
         case "error":
           updateTurn(variant, turnId, (t) => ({
@@ -201,6 +246,13 @@ export default function App() {
           prompt,
           customer_id: customerId,
           model: selectedModel,
+          ...(variant === "v2"
+            ? {
+                skills_enabled: v2SkillsEnabled,
+                episodic_enabled: v2EpisodicEnabled,
+                planner_enabled: v2PlannerEnabled,
+              }
+            : {}),
           signal: controller.signal,
           onEvent: handleEvent(variant, turnId),
         });
@@ -234,6 +286,9 @@ export default function App() {
     setResetMsg("resetting…");
     try {
       await Promise.all([resetAgent(AGENTS.v1), resetAgent(AGENTS.v2)]);
+      // /api/reset wipes v2's non-seed episodic-memory files, so the
+      // drawer's cached content is stale.
+      bumpV2Memory();
       setResetMsg("both agents reset");
       setTimeout(() => setResetMsg(null), 2500);
     } catch (err) {
@@ -243,6 +298,29 @@ export default function App() {
 
   function toggleEnabled(variant: AgentVariant) {
     setters[variant]((s) => ({ ...s, enabled: !s.enabled }));
+  }
+
+  /** Stage a v2 feature toggle behind the confirm dialog. Because skills
+   *  and episodic memory are baked into the agent at build time
+   *  (system_prompt / tools / plugins), the cached agent no longer matches
+   *  the new toggle — so flipping requires a full v2 reset. */
+  function toggleV2Feature(feature: "skills" | "episodic") {
+    if (anyRunning) return;
+    const current = feature === "skills" ? v2SkillsEnabled : v2EpisodicEnabled;
+    setPendingV2Toggle({ feature, next: !current });
+  }
+
+  /** Confirm-dialog handler. Applies the staged toggle, then runs the same
+   *  full reset as the top-bar button so behavior stays consistent. */
+  async function confirmV2Toggle() {
+    if (!pendingV2Toggle) return;
+    const { feature, next } = pendingV2Toggle;
+    setPendingV2Toggle(null);
+
+    if (feature === "skills") setV2SkillsEnabled(next);
+    else setV2EpisodicEnabled(next);
+
+    await reset();
   }
 
   /** Simulate "time has passed" for the episodic-memory demo. Both agents'
@@ -276,7 +354,10 @@ export default function App() {
         endSession(AGENTS.v1, customerId),
         endSession(AGENTS.v2, customerId),
       ]);
-      setResetMsg("session ended — episodic memory preserved");
+      // The file is preserved server-side, but a refetch confirms that
+      // for the audience (and re-renders the drawer with the same chars).
+      bumpV2Memory();
+      setResetMsg("session ended, episodic memory preserved");
       setTimeout(() => setResetMsg(null), 3000);
     } catch (err) {
       setResetMsg(`end_session failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -284,11 +365,12 @@ export default function App() {
   }
 
   /** Called when the presenter clicks a scenario prompt in the panel.
-   *  Pre-fills the composer; flips the session/model dropdowns to whatever
-   *  the scenario specifies. Sending stays manual. */
+   *  Pre-fills the composer; flips the model dropdown if the scenario
+   *  specifies one. The customer dropdown is NOT auto-flipped — the
+   *  scenario card shows the intended customer as a hint, but a manual
+   *  selection in the header wins. Sending stays manual. */
   function applyScenario(scenario: DemoScenario, prompt: ScenarioPrompt) {
     setComposerText(prompt.text);
-    if (scenario.customer_id) setCustomerId(scenario.customer_id);
     if (scenario.model) setSelectedModel(scenario.model);
   }
 
@@ -302,7 +384,7 @@ export default function App() {
           </div>
           <div className="flex flex-col leading-tight">
             <div className="text-sm font-semibold tracking-tight">
-              Lab-01 — Agent comparison
+              Lab-01 · Agent comparison
             </div>
             <div className="text-[11px] text-muted-foreground">
               Same prompt → both agents → watch the boundary lessons land
@@ -365,7 +447,7 @@ export default function App() {
             size="sm"
             onClick={nextSession}
             disabled={anyRunning}
-            title="Simulate 'time has passed' — drop conversation memory on both sides; v2's episodic memory file persists."
+            title="Simulate 'time has passed'. Drops conversation memory on both sides; v2's episodic memory file persists."
           >
             <Hourglass className="mr-1 h-3.5 w-3.5" />
             next session
@@ -404,6 +486,21 @@ export default function App() {
               toolsLoading={v2ToolsLoading}
               toolsError={v2ToolsError}
               onToggleEnabled={() => toggleEnabled("v2")}
+              skillsEnabled={v2SkillsEnabled}
+              episodicEnabled={v2EpisodicEnabled}
+              plannerEnabled={v2PlannerEnabled}
+              onToggleSkills={() => toggleV2Feature("skills")}
+              onToggleEpisodic={() => toggleV2Feature("episodic")}
+              onTogglePlanner={() => {
+                // Planner toggle is per-request — no agent rebuild, no
+                // confirm dialog, no reset. The next /api/run picks up
+                // the new value via the request body.
+                if (anyRunning) return;
+                setV2PlannerEnabled((v) => !v);
+              }}
+              featuresDisabled={anyRunning}
+              customerId={customerId}
+              memoryRefreshKey={v2MemoryRefreshKey}
             />
           </main>
           <footer className="shrink-0 pb-4">
@@ -428,6 +525,22 @@ export default function App() {
           </aside>
         )}
       </div>
+
+      <ConfirmDialog
+        open={!!pendingV2Toggle}
+        title={
+          pendingV2Toggle
+            ? `Turn ${pendingV2Toggle.next ? "on" : "off"} ${
+                pendingV2Toggle.feature === "skills" ? "skills" : "episodic memory"
+              }?`
+            : ""
+        }
+        description="This triggers a full reset, same as the reset button. Both agents' chat history and mock data will be cleared, and v2's non-seed episodic memory will be wiped."
+        confirmLabel="reset"
+        destructive
+        onConfirm={confirmV2Toggle}
+        onCancel={() => setPendingV2Toggle(null)}
+      />
     </div>
   );
 }

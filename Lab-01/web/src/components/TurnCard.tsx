@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkBreaks from "remark-breaks";
-import { User, AlertCircle, ChevronRight } from "lucide-react";
+import { User, AlertCircle, ChevronRight, ListChecks } from "lucide-react";
 import {
   Collapsible,
   CollapsibleContent,
@@ -48,6 +48,21 @@ export function TurnCard({ turn, isLatest }: Props) {
           {turn.user_prompt}
         </div>
       </div>
+
+      {/* Plan — v2 + planner-enabled only. Shown inline (not a drawer) so
+          the audience can read the planner's intent / approach / skills /
+          policies decision before any tool call streams in. */}
+      {turn.plan && (
+        <div className="ml-9 rounded-md border bg-muted px-3 py-2 text-xs">
+          <div className="mb-1.5 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-v2">
+            <ListChecks className="h-3.5 w-3.5" />
+            plan
+          </div>
+          <pre className="whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed text-foreground/90">
+            {turn.plan}
+          </pre>
+        </div>
+      )}
 
       {/* Drawers: framed message + system prompt */}
       <div className="flex flex-col gap-1 pl-9 text-xs">

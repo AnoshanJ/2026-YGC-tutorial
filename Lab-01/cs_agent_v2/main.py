@@ -42,7 +42,8 @@ load_dotenv(_LAB_ROOT / ".env")
 load_dotenv(Path(__file__).parent / ".env", override=False)
 
 from agent.core import ROOT, build_agent, frame_prompt, prepend_memory
-from agent.profile import load_profile
+from agent.planner import format_tool_specs, plan_for_prompt
+from agent.profile import apply_overrides, load_profile
 from strands import Agent
 from strands.models.openai import OpenAIModel
 
@@ -61,25 +62,28 @@ EPISODIC_DIR = ROOT / "memory" / "episodic"
 _AGENTS: dict[str, Agent] = {}
 
 
-def get_agent(customer_id: str) -> Agent:
+def get_agent(customer_id: str, profile=PROFILE) -> Agent:
     if customer_id not in _AGENTS:
-        _AGENTS[customer_id] = build_agent(profile=PROFILE, customer_id=customer_id)
+        _AGENTS[customer_id] = build_agent(profile=profile, customer_id=customer_id)
     return _AGENTS[customer_id]
 
 
-# A dedicated catalog agent for /api/tools. The tool registry doesn't
-# depend on customer_id, but build_agent does customer-specific work
-# (episodic memory load, hook binding) for each customer in _AGENTS.
-# Keeping a sentinel agent here avoids paying the MCP subprocess spawn
-# cost twice when the UI loads the panels.
-_CATALOG_AGENT: Agent | None = None
+# Dedicated catalog agents for /api/tools — one per (skills_enabled,
+# episodic_enabled) combo so the drawer reflects the live tool set for
+# the current UI toggle state. At most 4 cached instances.
+_CATALOG_AGENTS: dict[tuple[bool, bool], Agent] = {}
 
 
-def _get_catalog_agent() -> Agent:
-    global _CATALOG_AGENT
-    if _CATALOG_AGENT is None:
-        _CATALOG_AGENT = build_agent(profile=PROFILE, customer_id="_catalog")
-    return _CATALOG_AGENT
+def _get_catalog_agent(skills_enabled: bool, episodic_enabled: bool) -> Agent:
+    key = (skills_enabled, episodic_enabled)
+    if key not in _CATALOG_AGENTS:
+        profile = apply_overrides(
+            PROFILE,
+            skills_enabled=skills_enabled,
+            episodic_enabled=episodic_enabled,
+        )
+        _CATALOG_AGENTS[key] = build_agent(profile=profile, customer_id="_catalog")
+    return _CATALOG_AGENTS[key]
 
 
 # ---------------------------------------------------------------------------
@@ -104,9 +108,11 @@ def _summarize_args(name: str, args: dict | None) -> str:
     if name == "search_policy_kb":
         return f'"{_truncate(args.get("query", ""), 40)}"'
     if name == "issue_refund":
+        pct = args.get("refund_percentage")
+        pct_str = f"{pct:.0%}" if isinstance(pct, (int, float)) else "?"
         return (
             f"{args.get('order_id', '?')}, "
-            f"${args.get('amount_usd', '?')}, "
+            f"{pct_str}, "
             f'"{_truncate(args.get("reason", ""), 30)}"'
         )
     if name == "escalate_to_human":
@@ -298,6 +304,16 @@ class RunRequest(BaseModel):
     prompt: str
     customer_id: str
     model: str | None = None  # Per-request override; falls back to PROFILE.model.
+    # UI toggles for v2 features. Null falls back to profile defaults.
+    # `skills_enabled` and `episodic_enabled` require a session reset (the
+    # agent is cached and its system_prompt / tools / plugins are baked at
+    # build time), so the frontend calls /api/reset before sending a request
+    # with new values. `planner_enabled` is a per-request decision (the
+    # planner is a separate LLM call, not part of the agent build), so it
+    # can flip freely without a reset.
+    skills_enabled: bool | None = None
+    episodic_enabled: bool | None = None
+    planner_enabled: bool | None = None
 
 
 app = FastAPI(title="cs_agent_v2", version="0.1.0")
@@ -317,17 +333,54 @@ def health() -> dict[str, Any]:
 
 
 @app.get("/api/tools")
-def tools_catalog() -> dict[str, Any]:
-    """List this agent's tools (typed MCP specs + local episodic-memory
-    tools + the AgentSkills loader). UI fetches once per panel and renders
-    a drawer."""
-    agent = _get_catalog_agent()
+def tools_catalog(
+    skills_enabled: bool | None = None,
+    episodic_enabled: bool | None = None,
+) -> dict[str, Any]:
+    """List the agent's tools (MCP specs + local episodic-memory tools + the
+    AgentSkills loader). The toggle flags scope the result to the live tool
+    set for that combo — the UI refetches whenever the toggles flip so the
+    drawer matches what the agent actually has."""
+    effective_skills = (
+        skills_enabled if skills_enabled is not None else bool(PROFILE.skills_dir)
+    )
+    effective_episodic = (
+        episodic_enabled
+        if episodic_enabled is not None
+        else PROFILE.memory.episodic.enabled
+    )
+    agent = _get_catalog_agent(effective_skills, effective_episodic)
     return {"tools": agent.tool_registry.get_all_tool_specs()}
+
+
+@app.get("/api/memory")
+def get_memory(customer_id: str) -> dict[str, Any]:
+    """Return the episodic-memory file contents for a customer.
+
+    The endpoint is unconditional so the UI can show "empty" vs "missing"
+    states. The web frontend gates whether to surface the drawer at all
+    behind the v2 episodic_enabled toggle."""
+    from agent.memory import _path, load
+
+    return {
+        "customer_id": customer_id,
+        "exists": _path(customer_id).exists(),
+        "content": load(customer_id),
+    }
 
 
 @app.post("/api/run")
 async def run(req: RunRequest):
-    agent = get_agent(req.customer_id)
+    # Apply UI toggle overrides to a per-request profile copy. From here on
+    # the profile IS the source of truth — no separate flag plumbing.
+    effective_profile = apply_overrides(
+        PROFILE,
+        skills_enabled=req.skills_enabled,
+        episodic_enabled=req.episodic_enabled,
+        planner_enabled=req.planner_enabled,
+    )
+    print(effective_profile)
+    agent = get_agent(req.customer_id, effective_profile)
     # Apply the per-request model choice by mutating the cached agent's
     # model. Conversation memory (`agent.messages`) is untouched, so the
     # same chat continues with a different backend.
@@ -338,20 +391,70 @@ async def run(req: RunRequest):
     # CustomerIdBindingHook, not inlined into the message.
     framed_prompt = frame_prompt(req.customer_id, req.prompt)
 
+    # Planning layer: a small non-streaming LLM call (no tools) that reads
+    # the customer message and produces a <plan> block scoping the turn —
+    # intent, approach, info_needed, skills, policies. Prepended to the
+    # user message so the main agent reads intent BEFORE picking tools.
+    # Separating intent recognition from tool selection is what stops the
+    # main agent from pattern-matching on "late order → refund" and missing
+    # what the customer actually wants. See agent/planner.py.
+    #
+    # Gated by `profile.planner.enabled` so the UI toggle / YAML flag can
+    # flip it off mid-demo to show the regression. The planner sees the
+    # LIVE tool surface — tool specs come straight from the cached agent's
+    # registry, so adding / removing an MCP tool is auto-reflected in the
+    # planner's catalogue. No drift.
+    plan = ""
+    if effective_profile.planner.enabled:
+        planner_model = req.model or PROFILE.model
+        try:
+            tools_catalogue = format_tool_specs(
+                agent.tool_registry.get_all_tool_specs()
+            )
+            # Only let the planner suggest skills if the main agent
+            # actually has the AgentSkills plugin loaded — otherwise the
+            # plan would point at procedures the agent can't load.
+            plan = await plan_for_prompt(
+                req.prompt,
+                model=planner_model,
+                tools_catalogue=tools_catalogue,
+                skills_enabled=bool(effective_profile.skills_dir),
+            )
+        except Exception:  # noqa: BLE001
+            # Planner failures (timeout, rate limit, tool-registry hiccup)
+            # shouldn't take the turn down — fall back to the unplanned
+            # prompt and let the main agent handle the message as it would
+            # have before.
+            log.exception("planner call failed; proceeding without a plan")
+            plan = ""
+
     # Episodic memory injection: on the FIRST turn after a fresh Agent build
     # (e.g. right after /api/end_session has cleared the cache), prepend the
     # customer's stored notes inside `<episodic_memory>` tags. We deliberately
     # put memory at the user-message level — not the system prompt — so the
     # LLM weights it as session context, and so the protocol text in the
     # system prompt doesn't drown out the actual notes.
-    if not agent.messages and PROFILE.memory.episodic.enabled:
+    if not agent.messages and effective_profile.memory.episodic.enabled:
         framed_prompt = prepend_memory(
             req.customer_id,
             framed_prompt,
-            compact_threshold=PROFILE.memory.episodic.compact_threshold,
+            compact_threshold=effective_profile.memory.episodic.compact_threshold,
         )
 
+    # Plan goes above the memory + message, since intent is the first thing
+    # the model should read. Order in the final user message:
+    #   <plan>…</plan>
+    #   <episodic_memory>…</episodic_memory>   (only on the first turn of a session)
+    #   <customer's actual message>
+    if plan:
+        framed_prompt = f"{plan}\n\n{framed_prompt}"
+
     async def generator():
+        # Emit the plan as its own SSE event so the trace UI can render it
+        # as a distinct step before tool calls start. Frontend that doesn't
+        # know about this event type will silently drop it.
+        if plan:
+            yield {"event": "plan", "data": json.dumps({"content": plan})}
         try:
             async for ev in _run_agent_stream(agent, framed_prompt):
                 yield ev
@@ -364,14 +467,14 @@ async def run(req: RunRequest):
 
 @app.post("/api/reset")
 def reset() -> dict[str, Any]:
-    """Reset writable state: wipe shared mock data on disk and reseed,
+    """Reset writable state: wipe v2's mock data on disk and reseed,
     rebuild agents (which respawns MCP subprocesses that re-read the
     fresh data files), clear non-seed episodic memory."""
-    # Mock data is file-backed on disk and SHARED with v1 — wiping the
-    # files here means v1's next read also sees clean state. The freshly
-    # spawned v2 MCP subprocesses on the next /api/run pull from seeds.
+    # Mock data is file-backed on disk and scoped per-agent — wiping
+    # v2's files here leaves v1's state alone. The freshly spawned v2
+    # MCP subprocesses on the next /api/run pull from seeds.
     from mocks.client import reset_data_files
-    reset_data_files()
+    reset_data_files(PROFILE.agent_id)
 
     # Dropping cached agents triggers a fresh build (and fresh MCP subprocesses
     # that read the now-reseeded data files) on the next request.

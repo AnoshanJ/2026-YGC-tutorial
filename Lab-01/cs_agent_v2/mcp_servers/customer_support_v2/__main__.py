@@ -54,13 +54,15 @@ mcp = FastMCP("customer-support-v2")
 # agent — single source of truth for agent_id / name / refund_cap. In a
 # real deployment this would come from the team's own config service or
 # service-principal credentials.
-_client = CustomerSupportClient()
 _profile = load_profile()
 _identity = AgentIdentity(
     agent_id=_profile.agent_id,
     name=_profile.name,
     refund_cap_usd=_profile.refund_cap_usd,
 )
+# The mock backend's data files are scoped to this agent_id so v2's writes
+# never leak into v1's view of the world (and vice versa).
+_client = CustomerSupportClient(agent_id=_profile.agent_id)
 
 
 def _load_owned_order(customer_id: str, order_id: str):
@@ -151,7 +153,7 @@ def get_open_tickets(customer_id: str) -> dict:
     still hanging vs. resolved.
 
     Empty list = no open tickets on file. If a ticket your memory referenced
-    is NOT in here, treat memory as stale and update it via `remember`.
+    is NOT in here, treat memory as stale and update it via `append_memory`.
     """
     tickets = _client.get_open_tickets(customer_id)
     return {"tickets": tickets, "count": len(tickets)}
@@ -162,10 +164,23 @@ def get_refund_history(customer_id: str) -> dict:
     """Return every refund previously issued to this customer.
 
     Call this BEFORE any new refund — episodic memory may claim "$X already
-    refunded on order Y", but this ledger is the source of truth. Each result
-    includes ref, order_id, amount_usd, reason, issued_at. Use it to:
+    refunded on order Y", but this ledger is the source of truth.
+
+    Each entry includes:
+      - `ref`              — refund reference id
+      - `order_id`         — the order the refund was issued against
+      - `amount_usd`       — dollar amount logged
+      - `refund_percentage`— the fraction of order.total_usd this refund
+        represented (e.g. 0.10 for a 10% shipping credit). SUM these per
+        order to know how much percentage you have left to refund before
+        you hit the category cap from `refund_calculation`. No dollar-math
+        needed.
+      - `reason`, `issued_at`, `agent_id` — context.
+
+    Use it to:
       - avoid double-refunding an order (anti-split policy)
-      - reconcile what episodic memory says against the audit trail
+      - subtract prior `refund_percentage` from the category percentage
+        when issuing a new refund on the same order
       - cite a specific past `ref` in your reply when relevant
     """
     refunds = _client.get_refund_history(customer_id)
@@ -208,6 +223,35 @@ def cancel_order(customer_id: str, order_id: str, reason: str) -> dict:
     Scoped to the verified customer. `reason` is logged to the audit
     ledger. Same ownership and already-shipped error contracts as
     `update_shipping_address`.
+
+    IMPORTANT — cancel_order does NOT issue a refund. It only flips the
+    order's status to `cancelled` and writes a `cancel` ledger entry.
+    If the customer paid for this order, you MUST call `issue_refund`
+    afterwards or the customer never gets their money back.
+
+    Post-condition (mandatory unless the order was never charged):
+
+      1. After this returns `{"ok": True, ...}`, look up the
+         `refund_calculation` policy for the cancellation percentage
+         (currently 0.90 for placed/preparing).
+      2. Call `get_refund_history(customer_id)` and SUM the prior
+         `refund_percentage` values for THIS `order_id`. That's
+         `already_refunded_pct`.
+      3. Compute `net_pct = cancellation_pct - already_refunded_pct`.
+      4. If `net_pct > 0`, call
+         `issue_refund(order_id, refund_percentage=net_pct,
+                       reason="cancel_net_of_prior")`.
+         If `net_pct <= 0`, do NOT call issue_refund — the customer
+         has already been refunded the full cancellation entitlement
+         from a prior credit. Explain that in the reply.
+      5. Confirm BOTH refs (cancel + refund) in the reply, or explain
+         why no refund was issued.
+
+    Skipping the refund step is the most common cancel-flow bug. The
+    audit ledger will show `cancel` with no following `refund` entry
+    on the same `order_id` and the customer will open another ticket.
+
+    See the `handle-cancellation` skill for the full procedure.
     """
     o, err = _load_owned_order(customer_id, order_id)
     if err is not None:
@@ -220,38 +264,81 @@ def cancel_order(customer_id: str, order_id: str, reason: str) -> dict:
             "remediation": "contact_customer_for_return",
         }
     ref = _client.cancel_order(order_id, reason, _identity.agent_id)
-    return {"ok": True, "ref": ref}
+    return {
+        "ok": True,
+        "ref": ref,
+        "next_step": (
+            "issue_refund is NOT automatic. If the customer was charged, "
+            "compute the net refund (cancellation_pct minus any prior "
+            "refund_percentage on this order from get_refund_history) and "
+            "call issue_refund. See handle-cancellation skill."
+        ),
+    }
 
 
 @mcp.tool()
 def issue_refund(
-    customer_id: str, order_id: str, amount_usd: float, reason: str
+    customer_id: str, order_id: str, refund_percentage: float, reason: str
 ) -> dict:
-    """Issue a refund on an order, scoped to the verified customer.
+    """Issue a refund as a percentage of the order's total_usd.
 
-    Pass `customer_id` from the message prefix. Ownership is enforced
-    server-side — a mismatch returns
-    {"error": "ownership_mismatch", "code": 403, ...} and you should NOT
-    retry with a different customer_id.
+    `refund_percentage` is a fraction in (0, 1] — e.g. `0.10` for 10%, `0.80` for
+    80%, `1.0` for a full refund. The server multiplies it by the order's
+    `total_usd` to get the dollar amount logged in the ledger and checked
+    against the agent's cap. The agent does NOT pass the dollar amount;
+    pick the right percentage instead.
 
-    Enforces this server's refund cap (set at launch via REFUND_CAP_USD).
-    If amount_usd exceeds the cap, returns:
-      {"error": "policy_violation", "code": 403, "detail": "...",
-       "remediation": "escalate_to_human"}
+    Procedure the agent MUST follow (otherwise audit will flag the call):
 
-    The remediation is the contract: a 403 is PERMANENT — escalate, don't
-    retry with a smaller amount. Splitting a single refund into multiple
-    smaller calls is explicitly prohibited by the `refund_authority`
-    policy and will be flagged in audit.
+      1. Call `search_policy_kb` for `refund_calculation` to get the
+         percentage for the refund category (damaged / cancellation /
+         shipping_delay / return_window). Do NOT pick a number from memory.
+      2. Call `get_refund_history(customer_id)`, filter entries by
+         THIS `order_id`, and SUM their `refund_percentage` values.
+         That sum is `already_refunded_pct`. The ledger records the
+         fraction every prior refund used — no amount/total math.
+      3. Compute net: `net_pct = category_pct - already_refunded_pct`.
+      4. If `net_pct <= 0`, do NOT call this tool — escalate instead; the
+         customer has already been refunded everything policy allows.
+      5. Pass `net_pct` as `refund_percentage`. The server logs both pct and
+         dollar amount.
+
+    Ordering constraint for cancellation refunds: if this refund is the
+    money-back leg of a cancellation, `cancel_order` MUST have already
+    succeeded on this order BEFORE you call this tool. Refunding first
+    and then cancelling leaves a window where you've paid out on a
+    still-active order; if the cancel later rejects (e.g. it shipped
+    between calls), you have to reverse the refund. Always cancel first.
+
+    Errors:
+      - {"error": "ownership_mismatch", "code": 403, ...} — wrong customer,
+        do NOT retry with a different `customer_id`.
+      - {"error": "invalid_pct", ...} — `refund_percentage` not in (0, 1].
+      - {"error": "policy_violation", "code": 403,
+         "detail": "refund of $X exceeds agent cap of $Y",
+         "remediation": "escalate_to_human"} — over cap. PERMANENT;
+        do NOT split into smaller calls — that violates `refund_authority`.
 
     Use specific `reason` values:
       - "shipping_delay_credit" for delay compensation
       - "damaged_item_full_refund" / "damaged_item_partial" for damage
       - "return_within_window" for normal returns
+      - "cancellation_refund" / "cancel_net_of_prior" for cancellations
     """
     o, err = _load_owned_order(customer_id, order_id)
     if err is not None:
         return err
+
+    if not isinstance(refund_percentage, (int, float)) or refund_percentage <= 0 or refund_percentage > 1:
+        return {
+            "error": "invalid_pct",
+            "detail": (
+                f"refund_percentage must be a fraction in (0, 1] (e.g. 0.10 for 10%), "
+                f"got {refund_percentage!r}"
+            ),
+        }
+
+    amount_usd = round(float(refund_percentage) * float(o.total_usd), 2)
 
     allowed, why = _identity.can_refund(amount_usd)
     if not allowed:
@@ -263,9 +350,19 @@ def issue_refund(
         }
 
     ref = _client.issue_refund(
-        order_id, o.customer_id, amount_usd, reason, _identity.agent_id
+        order_id,
+        o.customer_id,
+        amount_usd,
+        reason,
+        _identity.agent_id,
+        refund_percentage=float(refund_percentage),
     )
-    return {"ok": True, "ref": ref, "amount_usd": amount_usd}
+    return {
+        "ok": True,
+        "ref": ref,
+        "refund_percentage": float(refund_percentage),
+        "amount_usd": amount_usd,
+    }
 
 
 # ----- Escalation --------------------------------------------------

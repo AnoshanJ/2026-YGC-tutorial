@@ -16,7 +16,7 @@ import os
 
 AGENT_ID = os.environ.get("AGENT_ID", "cs-agent-v1")
 AGENT_NAME = os.environ.get("AGENT_NAME", "Customer Support Agent")
-MODEL_ID = os.environ.get("AGENT_MODEL", "gpt-5-mini")
+MODEL_ID = os.environ.get("AGENT_MODEL", "gpt-5.4-mini")
 REFUND_CAP_USD = float(os.environ.get("REFUND_CAP_USD", "200"))
 # Max messages kept in `agent.messages` by Strands' SlidingWindowConversationManager.
 # Drop low (e.g. 4) to demo the agent forgetting older turns.

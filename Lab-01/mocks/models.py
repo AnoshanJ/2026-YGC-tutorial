@@ -40,6 +40,10 @@ class LedgerEntry(BaseModel):
     order_id: str | None = None
     customer_id: str | None = None
     amount_usd: float | None = None
+    # Refund-only: the fraction of order.total_usd that was refunded (e.g. 0.10
+    # for a 10% shipping-delay credit). Recorded so the agent can SUM prior
+    # percentages on an order directly, without redoing the amount/total math.
+    refund_percentage: float | None = None
     reason: str = ""
     actor_agent_id: str = ""
     timestamp: str = ""

@@ -14,6 +14,14 @@ export interface UserMessageEvent {
   content: string;
 }
 
+export interface PlanEvent {
+  // v2 only — emitted right after /api/run starts if the planner toggle
+  // is on. The content is the planner's <plan>…</plan> block, ready to
+  // render verbatim. Frontend without a handler drops this silently.
+  type: "plan";
+  content: string;
+}
+
 export interface ToolCallEvent {
   type: "tool_call";
   tool_use_id: string;
@@ -48,6 +56,7 @@ export interface ErrorEvent {
 export type AgentEvent =
   | SystemPromptEvent
   | UserMessageEvent
+  | PlanEvent
   | ToolCallEvent
   | ToolResultEvent
   | TextDeltaEvent
@@ -74,6 +83,10 @@ export interface Turn {
   user_prompt: string;       // what the user typed
   framed_message: string;    // what the server reported handing to the LLM
   system_prompt: string;     // the rendered system prompt for this turn
+  // v2 + planner-enabled only: the planner's <plan>…</plan> block, which
+  // also lives inside `framed_message`. Surfaced as a separate field so
+  // the trace UI can render it as its own visible step.
+  plan?: string;
   trace: TraceRow[];
   streaming_reply: string;
   final_reply: string;

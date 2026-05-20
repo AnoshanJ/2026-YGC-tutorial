@@ -1,9 +1,15 @@
-"""CustomerSupportClient — file-backed mock backend, shared by v1 and v2.
+"""CustomerSupportClient — file-backed mock backend, isolated per agent.
 
-Both agents read and write the same `mocks/data/*.json` files on disk.
-The canonical seed lives at `mocks/seeds/*.json` and is read-only at
-runtime — on first instantiation (or after `reset()`), the data files
-are repopulated from those seeds.
+Each agent gets its own data directory under `mocks/data/<agent_id>/`.
+v1 and v2 never share runtime state — one agent's refunds, cancellations,
+or address updates are completely invisible to the other. This is what
+makes the side-by-side demo a real comparison: each agent acts on the
+world it created, not a world contaminated by the other agent's writes.
+
+The canonical seed lives at `mocks/seeds/*.json` and is read-only and
+shared: both agents start from the same fixtures. On first instantiation
+(or after `reset()`), the agent's own data files are repopulated from
+those shared seeds.
 
 Why file-backed and not pure in-memory: v2's MCP subprocesses are
 re-spawned whenever the cached Agent is dropped (e.g. on /api/end_session
@@ -11,21 +17,17 @@ during the §5 episodic-memory demo). An in-memory client would lose
 every mutation on that respawn — refunds would silently disappear,
 ledger entries would vanish, and the demo would run backwards from
 intended. Disk-backed state survives the subprocess lifecycle because
-the new client just reads the JSON it was written to. v1's tools-module
-client stays alive across end_session too, but it also writes through
-to the same disk files so both agents share the same view of the world.
+the new client just reads the JSON it was written to.
 
 The agents do hold a per-process in-memory cache for speed (every read
 hitting the disk would parse the same JSON N times per turn). The cache
-is refreshed from disk on every mutation made by THIS instance; it does
-NOT automatically pick up writes from a sibling instance. For the demo
-that's fine: v1 and v2 don't read each other's mid-session writes —
-they each act on their own request, then either reset or end_session
-brings everyone back to a known disk state.
+is refreshed from disk on every mutation made by THIS instance.
 
-To reset state: call `reset()` — wipes the data files, reseeds from the
-canonical seeds, and reloads this instance's cache. v1's /api/reset and
-v2's /api/reset both go through this path.
+To reset state: call `reset()` (or `reset_data_files(agent_id)` without
+an instance) — wipes only that agent's data files and reseeds them from
+the shared canonical seeds. v1's /api/reset and v2's /api/reset each
+reset their own agent's data; the web UI's "Reset" button hits both
+endpoints so the lab returns to a known starting state across the board.
 """
 
 from __future__ import annotations
@@ -37,7 +39,7 @@ from pathlib import Path
 from mocks.models import Customer, Order
 
 SEEDS_DIR = Path(__file__).parent / "seeds"
-DATA_DIR = Path(__file__).parent / "data"
+DATA_ROOT = Path(__file__).parent / "data"
 
 CUSTOMERS_FILE = "customers.json"
 ORDERS_FILE = "orders.json"
@@ -48,63 +50,77 @@ def _load_seed(name: str):
     return json.loads((SEEDS_DIR / name).read_text())
 
 
-def _seed_if_missing() -> None:
-    """Lazy initialisation: copy seeds into mocks/data/ for any file that
-    doesn't exist yet. Doesn't touch files that ARE already present —
-    that's how we preserve mid-demo state across MCP subprocess restarts."""
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
+def _agent_data_dir(agent_id: str) -> Path:
+    if not agent_id:
+        raise ValueError("agent_id is required — each agent has its own data dir")
+    return DATA_ROOT / agent_id
+
+
+def _seed_if_missing(data_dir: Path) -> None:
+    """Lazy initialisation: copy shared seeds into the agent's data dir for
+    any file that doesn't exist yet. Doesn't touch files that ARE already
+    present — that's how we preserve mid-demo state across MCP subprocess
+    restarts."""
+    data_dir.mkdir(parents=True, exist_ok=True)
     for name in (CUSTOMERS_FILE, ORDERS_FILE, LEDGER_FILE):
-        target = DATA_DIR / name
+        target = data_dir / name
         if target.exists():
             continue
         target.write_text(json.dumps(_load_seed(name), indent=2) + "\n")
 
 
-def reset_data_files() -> None:
-    """Delete every data file and reseed. Used by /api/reset on both agents
-    (v1 calls it via `_client.reset()`; v2 calls it directly from main.py
-    so the next-spawned MCP subprocess re-reads clean state)."""
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
+def reset_data_files(agent_id: str) -> None:
+    """Delete the named agent's data files and reseed from the shared seeds.
+    Used by /api/reset on both agents (v1 calls it via `_client.reset()`;
+    v2 calls it directly from main.py so the next-spawned MCP subprocess
+    re-reads clean state). Only the named agent's data is touched — the
+    sibling agent's state is left alone."""
+    data_dir = _agent_data_dir(agent_id)
+    data_dir.mkdir(parents=True, exist_ok=True)
     for name in (CUSTOMERS_FILE, ORDERS_FILE, LEDGER_FILE):
-        target = DATA_DIR / name
+        target = data_dir / name
         if target.exists():
             target.unlink()
-    _seed_if_missing()
+    _seed_if_missing(data_dir)
 
 
 class CustomerSupportClient:
-    """File-backed backend keyed off the JSON seeds.
+    """File-backed backend keyed off the shared JSON seeds.
 
-    State lives on disk under `mocks/data/`. A per-instance cache speeds
-    up reads within a single process; every mutation writes through to
-    disk so a fresh client instance (e.g. an MCP subprocess respawn)
-    picks up the world as it was when the previous instance left it.
+    State lives on disk under `mocks/data/<agent_id>/`. A per-instance
+    cache speeds up reads within a single process; every mutation writes
+    through to disk so a fresh client instance (e.g. an MCP subprocess
+    respawn) picks up the world as it was when the previous instance
+    left it.
 
-    The seeds at `mocks/seeds/` are read-only at runtime — see
-    `reset()` to wipe the data files and reseed."""
+    The seeds at `mocks/seeds/` are read-only at runtime and shared
+    across agents — see `reset()` to wipe THIS agent's data files and
+    reseed from the canonical seeds without touching any sibling agent."""
 
-    def __init__(self) -> None:
-        _seed_if_missing()
+    def __init__(self, agent_id: str) -> None:
+        self._agent_id = agent_id
+        self._data_dir = _agent_data_dir(agent_id)
+        _seed_if_missing(self._data_dir)
         self._reload_cache()
 
     def _reload_cache(self) -> None:
         """Re-read the JSON files into the per-instance cache."""
-        self._customers: dict = json.loads((DATA_DIR / CUSTOMERS_FILE).read_text())
-        self._orders: dict = json.loads((DATA_DIR / ORDERS_FILE).read_text())
-        self._ledger: list = json.loads((DATA_DIR / LEDGER_FILE).read_text())
+        self._customers: dict = json.loads((self._data_dir / CUSTOMERS_FILE).read_text())
+        self._orders: dict = json.loads((self._data_dir / ORDERS_FILE).read_text())
+        self._ledger: list = json.loads((self._data_dir / LEDGER_FILE).read_text())
 
     def reset(self) -> None:
-        """Wipe data files, reseed from canonical seeds, refresh cache."""
-        reset_data_files()
+        """Wipe THIS agent's data files, reseed from canonical seeds, refresh cache."""
+        reset_data_files(self._agent_id)
         self._reload_cache()
 
     # ----- Disk write-through ------------------------------------------------
 
     def _flush_orders(self) -> None:
-        (DATA_DIR / ORDERS_FILE).write_text(json.dumps(self._orders, indent=2) + "\n")
+        (self._data_dir / ORDERS_FILE).write_text(json.dumps(self._orders, indent=2) + "\n")
 
     def _flush_ledger(self) -> None:
-        (DATA_DIR / LEDGER_FILE).write_text(json.dumps(self._ledger, indent=2) + "\n")
+        (self._data_dir / LEDGER_FILE).write_text(json.dumps(self._ledger, indent=2) + "\n")
 
     # ----- Reads -------------------------------------------------------------
 
@@ -215,9 +231,16 @@ class CustomerSupportClient:
         amount_usd: float,
         reason: str,
         agent_id: str,
+        refund_percentage: float | None = None,
     ) -> str:
+        """Append a refund entry. `refund_percentage` is the fraction of
+        order.total_usd this refund represents (e.g. 0.10 for a 10% shipping
+        credit). Stored so future calls can sum prior percentages directly."""
         existing_refunds = sum(1 for e in self._ledger if e.get("kind") == "refund")
         ref = f"refund_{1 + existing_refunds:04d}"
+        extra: dict = {"ref": ref}
+        if refund_percentage is not None:
+            extra["refund_percentage"] = float(refund_percentage)
         self._append_ledger(
             "refund",
             order_id,
@@ -225,7 +248,7 @@ class CustomerSupportClient:
             amount_usd,
             reason,
             agent_id,
-            extra={"ref": ref},
+            extra=extra,
         )
         return ref
 
@@ -277,7 +300,12 @@ class CustomerSupportClient:
         return out
 
     def get_refund_history(self, customer_id: str) -> list[dict]:
-        """All refunds previously issued to this customer."""
+        """All refunds previously issued to this customer.
+
+        Includes `refund_percentage` (fraction of order.total_usd) for each
+        entry — callers can SUM these directly when computing the net for a
+        new refund, instead of reverse-engineering pct from amount/total.
+        """
         out: list[dict] = []
         for e in self._ledger:
             if e.get("kind") != "refund":
@@ -289,6 +317,7 @@ class CustomerSupportClient:
                     "ref": e.get("ref"),
                     "order_id": e.get("order_id"),
                     "amount_usd": e.get("amount_usd"),
+                    "refund_percentage": e.get("refund_percentage"),
                     "reason": e.get("reason"),
                     "issued_at": e.get("timestamp"),
                     "agent_id": e.get("actor_agent_id"),
@@ -328,6 +357,11 @@ class CustomerSupportClient:
                         "RefundReference": r.get("ref"),
                         "OrderReference": r.get("order_id"),
                         "AmountUSD": f"{r.get('amount_usd', 0):.2f}",
+                        "RefundFractionOfOrderTotal_v2": (
+                            f"{r.get('refund_percentage'):.4f}"
+                            if r.get("refund_percentage") is not None
+                            else None
+                        ),
                         "IssuedAt_ISO8601": r.get("issued_at"),
                         "InitiatedByAgentId": r.get("agent_id"),
                         "ReasonText": f"<![CDATA[{r.get('reason') or ''}]]>",

@@ -10,7 +10,7 @@
 agent:
   id: cs-agent-v2
   name: Customer Support Agent
-  model: gpt-5-mini
+  model: gpt-5.4-mini
   language: English
 
   # The system prompt — everything the agent reads at the start of every
@@ -23,20 +23,26 @@ agent:
     Your job: help customers with order issues efficiently, accurately, and on policy.
 
     ## Session context
-    One customer is in session. Look them up via for their name, tier, and contact details, if needed. Do NOT ask the customer for their ID, ever. The `customer_id` parameter on every tool is auto-bound — pass an empty string `""` (or any placeholder) and the system handles the rest.
+    One customer is in session. Look them up for their name, tier, and contact details, if needed. Do NOT ask the customer for their ID, ever. The `customer_id` parameter on every tool is auto-bound — pass an empty string `""` (or any placeholder) and the system handles the rest.
 
     ## Your authority
-    - You can issue refunds up to ${refund_cap_usd:.2f}.
-    - Refunds above your cap MUST be escalated via `escalate_to_human`. Do NOT split into smaller refunds — that's a policy violation flagged in audit.
+    - You can issue refunds up to ${refund_cap_usd:.2f}. Refunds above this must be escalated.
+    - You must not cancel orders without customers explicit consent.
     - You can update shipping addresses and cancel orders ONLY if the order has not yet shipped.
     - Always include a reason on writes; it's audit-logged.
+    - You MUST always refer and adhere to policies. 
     - Escalate with priority `high` if you're unsure or if the situation feels adversarial.
 
     ## Approach
-    Investigate before acting: fetch customer and order details, check refund history, and consult policy. Act only once the issue and resolution path are clear. Skills document required procedures — always use the matching skill (per its description) before diagnosing or acting.
+    plan before acting: use <available_skills> to get step-by-step guidance on how to act on given task.  Policies must be followed fully.
 
     ## Style
-    Friendly, concise {language}. Acknowledge frustration when relevant. Cite policy by name once. Don't explain your tool calls. Avoid long responses as much as possible, or use .md format.
+    Reply in {language}. Friendly, warm, professional, concise — like a thoughtful human who respects the customer's time. Plain text, two to four sentences; markdown bullets only when they actually clarify.
+    - Reference orders by item, not just ID — e.g. "your blue coat (#12345)". Never ask the customer for an ID; look it up.
+    - Acknowledge with one short phrase when warranted (damage, lateness, missed event, billing error), then resolve. Never apologise three times.
+    - Take the single best next action; don't present a menu unless the customer asked for options.
+    - Cite a policy by name at most once, only when it's the reason for your action.
+    - Don't narrate tool calls — you're talking to a customer, not an engineer. But tell computations you did on refunds etc.
 
 # §2c — where AgentSkills auto-discovers SKILL.md files. Each subdirectory
 # with a SKILL.md becomes a skill. Audience writes a new one here in §2c.
@@ -70,7 +76,7 @@ mcp_servers:
 #
 #   episodic — past-sessions summary per customer. Loads memory/customer_<id>.md
 #              fully into the system prompt at agent build; the agent appends
-#              via `remember()` and overwrites via `compact_memory()`. §3
+#              via `append_memory()` and overwrites via `compact_memory()`. §3
 #              hands-on flips `episodic.enabled`.
 #
 #   semantic — cross-session vector retrieval (Mem0 / Letta / Zep). Out of
@@ -86,6 +92,16 @@ memory:
     compact_threshold: 4000
   # semantic:
   #   enabled: false
+
+# Planner — a small non-streaming LLM call that runs BEFORE the main agent
+# on every turn. Reads the customer message, produces a <plan> block
+# (intent, approach, info_needed, skills, policies), prepends it to the
+# user message so the main agent reads intent BEFORE picking tools.
+# Separates intent recognition from tool selection — the main agent can't
+# pattern-match its way past "what does the customer actually want?".
+# See cs_agent_v2/agent/planner.py. Flip via the UI toggle for the demo.
+planner:
+  enabled: true
 
 # §4b / Closing — scoped identity. Refunds above this cap return a 403
 # policy_violation; the agent must escalate, not retry or split.

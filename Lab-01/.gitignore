@@ -7,9 +7,10 @@ venv/
 .DS_Store
 
 # Runtime mock state (re-seeded from mocks/seeds/ on first run, or via
-# the /api/reset endpoint on either service). Shared by v1 and v2 — both
-# agents read and write the same files. See mocks/client.py.
-mocks/data/*.json
+# the /api/reset endpoint on either service). Scoped per-agent under
+# mocks/data/<agent_id>/ — v1 and v2 each have their own files and never
+# share runtime state. See mocks/client.py.
+mocks/data/
 
 # Web build artefacts and dependencies.
 web/dist/
@@ -23,3 +24,7 @@ cs_agent_v2/memory/episodic/customer_*.md
 cs_agent_v2/memory/sessions/
 
 *.swp
+
+
+DEMO_SCRIPT*
+slide*

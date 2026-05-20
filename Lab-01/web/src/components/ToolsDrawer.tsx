@@ -63,7 +63,7 @@ export function ToolsDrawer({ tools, loading, error }: Props) {
 function ToolRow({ tool }: { tool: AgentTool }) {
   const [open, setOpen] = useState(false);
   const description = (tool.description ?? "").trim();
-  const firstLine = description.split("\n")[0] || "—";
+  const firstLine = description.split("\n")[0] || "no description";
   const params = tool.inputSchema?.json?.properties ?? {};
   const required = new Set(tool.inputSchema?.json?.required ?? []);
   const paramNames = Object.keys(params);

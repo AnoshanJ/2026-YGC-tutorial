@@ -15,7 +15,7 @@ header: 'WSO2Con 2026 — Lab-01: Agent boundaries'
 <!--
 Speaker: ~60 min total, 8 sections + bridge.
 
-Open the browser: <http://localhost:5173>. Dark theme. Both panels show v1 (left, amber) and v2 (right, emerald) — SAME LLM (gpt-5-mini by default), same prompts. The lessons emerge from the harness around the LLM, not the LLM itself.
+Open the browser: <http://localhost:5173>. Dark theme. Both panels show v1 (left, amber) and v2 (right, emerald) — SAME LLM (gpt-5.4-mini by default), same prompts. The lessons emerge from the harness around the LLM, not the LLM itself.
 
 The Scenarios drawer (top bar, "scenarios" button) has every prompt we send — clicking pre-fills the composer and flips the session/model dropdowns. Use it; don't type prompts on stage.
 
@@ -55,7 +55,7 @@ Same model. Same prompt. Watch the loop.
 <!--
 Speaker: ~3 min.
 
-Pre-state: model = gpt-5-mini in both panels, session = Alice (cust_001), turns cleared.
+Pre-state: model = gpt-5.4-mini in both panels, session = Alice (cust_001), turns cleared.
 
 Click the scenario. Composer fills. Send.
 
@@ -119,10 +119,10 @@ Same LLM. Different tool docs. Different agent.
 Speaker: The LLM reads docstrings the way a junior engineer does. Vague names → it guesses. Free-text errors → it can't branch. SOAP noise → it spends tokens scanning. The agent IS as good as its tools.
 
 Optional 90-sec model-swap callout HERE if you want to drive the point home:
-- Flip dropdown to gpt-5 in both panels. Send the same prompt.
+- Flip dropdown to gpt-5.4 in both panels. Send the same prompt.
 - v1 looks BETTER on the smarter model — it works around its bad tools.
 - Frame: "Smart model masks bad tool design. That's a cost time-bomb. You paid 5× per call to paper over engineering you could've fixed once."
-- Flip back to gpt-5-mini.
+- Flip back to gpt-5.4-mini.
 -->
 
 ---
@@ -225,7 +225,7 @@ T2: *"I'm following up on my order issue from yesterday. Any update on the order
 Speaker: ~5 min of §5's 9.
 
 Click scenario. T1 prompt fills. Send.
-- v2: issues $10 shipping_delay_credit AND calls `remember()` → writes a one-line note to memory/episodic/customer_cust_001.md.
+- v2: issues $10 shipping_delay_credit AND calls `append_memory()` → writes a one-line note to memory/episodic/customer_cust_001.md.
 - v1: handles the request but writes nothing to disk. No episodic layer.
 
 Click "Next session" button in the top bar. Both panels show a "new session · time has passed" divider. In-process conversation memory is gone on both sides. v2's episodic FILE persists on disk.
@@ -323,7 +323,7 @@ Order #1234 is in_transit_delayed (4 days late, $89.50). The shipping_delay poli
 
 Send. Watch:
 - v2: searches policy_kb → finds shipping_delay → issues $10 refund with reason="shipping_delay_credit". DOES NOT cancel. Explains the policy in the reply.
-- v1: calls modify_order(status='cancelled', refund_usd=89.50) → cancel branch wins silently, the refund is dropped. OR makes two sequential calls and BOTH succeed — no shipped-status check.
+- v1: calls modify_order(status='cancelled', refund_percentage=1.0) → cancel branch wins silently, the refund is dropped. OR makes two sequential calls and BOTH succeed — no shipped-status check.
 
 Click v1's modify_order trace row open — show the silent-winner result. Agent thinks both ran; only one did. Audit ledger reflects reality.
 
