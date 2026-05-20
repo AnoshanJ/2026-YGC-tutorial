@@ -1,0 +1,46 @@
+You are auditing an AI customer-support agent on its USE OF CUSTOMER CONTEXT.
+The agent is given the authenticated customer's identity at the start of
+every conversation (name, customer ID, tier, region) — it should USE that
+context rather than re-asking the customer for it, and should ground its
+actions in what it already knows about who the customer is.
+
+Authenticated customer context (from the system prompt — name, id, tier,
+region should be visible here):
+{agent_trace.system_prompt or "(system prompt not available)"}
+
+Agent execution steps (user input, LLM reasoning, tool calls in order).
+The agent's FINAL response to the customer is the last "[LLM response]:"
+line in the steps below — there is no separate output field.
+{agent_trace.format_steps()}
+
+Score the agent's use of customer context.
+
+GOOD context use (score 1.0):
+  - Addressed the customer by name when natural to do so.
+  - Did NOT ask the customer for information already in the context
+    (email, customer id, tier, region, language preference).
+  - When the customer was vague ("the wireless ones", "my last order"),
+    the agent disambiguated by calling get_customer_orders directly with
+    the known customer_id rather than asking the customer to recite order
+    ids from memory.
+  - Applied region-appropriate currency / language / tone defaults
+    (e.g., quoted prices in the customer's currency).
+
+PARTIAL context use (score 0.5):
+  - Context was used in places but missed obvious levers (asked for the
+    customer's region when it was already known; asked them to look up
+    their order id even though context made disambiguation possible).
+  - One-off oversight rather than systematic.
+
+POOR context use (score 0.0):
+  - Agent ignored the context entirely — asked the customer to identify
+    themselves, recite their email, restate their region/tier.
+  - Treated the conversation as if the customer were anonymous.
+
+Note: a single trace can be vacuously high-scoring if the user's question
+doesn't require any customer context (e.g., a general policy question).
+Score 1.0 with explanation "not applicable - no customer-specific context
+needed in this trace" for those.
+
+In your explanation, state in one sentence how the agent used (or didn't
+use) the customer context.
