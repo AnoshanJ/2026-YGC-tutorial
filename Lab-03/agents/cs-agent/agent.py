@@ -33,7 +33,7 @@ from langgraph.prebuilt import create_react_agent
 from config import Config
 from tools import build_tools
 
-MODEL = "gpt-4o-mini"
+MODEL = "gpt-5.4-mini"
 
 # Strict — what the agent ships with. Has explicit anti-injection, policy-citation,
 # cross-customer-refusal, and over-cap-escalation guardrails baked in.
