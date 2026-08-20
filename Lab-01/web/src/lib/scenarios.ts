@@ -79,7 +79,7 @@ export const SCENARIOS: DemoScenario[] = [
     model: "gpt-5.4",
     prompts: [
       {
-        text: "Hi, my order #1234 is late. Can you check the status and apply any shipping credit I'm owed?",
+        text: "Cancel my order for the water bottle set pls, delivery taking forever.",
       },
     ],
   },
