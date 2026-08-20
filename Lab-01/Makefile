@@ -56,8 +56,8 @@ install:
 # group on Ctrl-C so you don't end up with orphaned uvicorn/vite processes.
 dev:
 	@trap 'kill 0' SIGINT SIGTERM; \
-	  (cd cs_agent_v1 && .venv/bin/uvicorn main:app --port 8001 --log-level warning) & \
-	  (cd cs_agent_v2 && .venv/bin/uvicorn main:app --port 8002 --log-level warning) & \
+	  (cd cs_agent_v1 && .venv/bin/uvicorn main:app --port 8001 --reload --log-level warning) & \
+	  (cd cs_agent_v2 && .venv/bin/uvicorn main:app --port 8002 --reload--log-level warning) & \
 	  (cd web && npm run dev) & \
 	  wait
 

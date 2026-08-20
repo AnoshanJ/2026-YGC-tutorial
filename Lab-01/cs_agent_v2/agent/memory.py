@@ -66,32 +66,37 @@ def clear(customer_id: str) -> None:
 
 
 # ----- Agent-facing tools -------------------------------------------------
-
-
 @tool
 def append_memory(customer_id: str, note: str) -> dict:
-    """Append one short note to this customer's episodic-memory log.
+    """Save a one-line episodic note about this customer for future reference always. 
+    Call this as the final tool before ending any conversation.
 
-    Use append_memory to store episodic memory for information the DB does not model well: customer situation, promises made, emotional tone, urgency, and recurring patterns.
+    Call it when the turn included any of:
+    - a promise, commitment, or expectation you set ("ships Friday", "I'll escalate")
+    - a compensation, exception, or goodwill gesture
+    - a stake or deadline the customer disclosed (travel, event, gift, business impact)
+    - notable emotional tone: distressed, threatening to churn, unusually patient
+    - a repeat of a problem they've hit before, or a pattern across their history
+    - anything you'd want to know going into the *next* conversation with them
 
-    Keep entries short and actionable. Include when relevant:
+    If you are unsure whether a turn qualifies, call it. A redundant note is cheap;
+    a lost commitment is not.
 
-    Order ID or entity involved
-    Action/promise made
-    Customer tone (1–2 words)
-    Important pattern or context
+    Skip it only when the turn left no residue: a status looked up, a policy quoted,
+    a tracking number read out, with nothing promised and nothing revealed.
 
-    Reference DB records instead of duplicating tool-retrievable facts like order status, refund refs, ticket IDs, or policy text.
+    Write for continuity, not transcription. Reference records by ID rather than
+    restating facts another tool can fetch (order status, refund refs, ticket IDs,
+    policy text). One call per turn, not one per fact.
 
-    Good:
-    #1234 delayed; customer flying tomorrow. Issued $10 shipping_delay credit. Tone: pressed but reasonable.
-
-    Bad:
-    Customer upset about delayed order and travel deadline.
-
-    Do not call append_memory for routine informational exchanges. Episodic memory is a continuity layer, not a transcript.
-
-    customer_id is injected by the harness; pass an empty string or placeholder if required.
+    Good: "#1234 delayed; customer flying tomorrow. Issued $10 shipping_delay credit.
+           Tone: pressed but reasonable."
+    Good: "3rd late delivery in 2mo (#1180, #1207, #1234). Hinted at switching.
+           Tone: resigned."
+    Bad:  "Customer upset about delayed order and travel deadline."
+           -> no ID, no action recorded, nothing a successor can act on.
+    Bad:  "Customer asked for order status; provided tracking."
+           -> routine, no residue. This call should not have been made.
     """
     append(customer_id, note)
     return {"ok": True, "saved_for": customer_id}

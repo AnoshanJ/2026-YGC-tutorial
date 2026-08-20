@@ -135,7 +135,7 @@ export const SCENARIOS: DemoScenario[] = [
       {
         label: "T2: tomorrow morning, at the airport",
         note: "Click 'Next session' BEFORE sending. Both agents' cached Agent drops (conversation memory wiped); v2's episodic memory FILE on disk persists; v1 has no episodic layer.",
-        text: "My flight is in 2 hours what should i do?",
+        text: "My flight is in 2 hours, what can i do?",
       },
     ],
   },
