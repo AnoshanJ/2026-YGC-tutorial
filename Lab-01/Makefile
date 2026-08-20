@@ -14,12 +14,13 @@
 
 SHELL := /bin/bash
 
-.PHONY: help install dev v1 v2 web reset clean
+.PHONY: help install dev v1 v2 web reset clean dev-reload
 
 help:
 	@echo "Lab-01 targets:"
 	@echo "  make install   — create per-agent venvs, install Python + Node deps"
 	@echo "  make dev       — start v1 (:8001), v2 (:8002), web (:5173) together"
+	@echo "  make dev-reload — start v1 (:8001), v2 (:8002), web (:5173) together with auto-reload"
 	@echo "  make v1        — start cs_agent_v1 only"
 	@echo "  make v2        — start cs_agent_v2 only"
 	@echo "  make web       — start the React frontend only"
@@ -56,8 +57,15 @@ install:
 # group on Ctrl-C so you don't end up with orphaned uvicorn/vite processes.
 dev:
 	@trap 'kill 0' SIGINT SIGTERM; \
-	  (cd cs_agent_v1 && .venv/bin/uvicorn main:app --port 8001 --reload --log-level warning) & \
-	  (cd cs_agent_v2 && .venv/bin/uvicorn main:app --port 8002 --reload--log-level warning) & \
+	  (cd cs_agent_v1 && .venv/bin/uvicorn main:app --port 8001 --log-level warning) & \
+	  (cd cs_agent_v2 && .venv/bin/uvicorn main:app --port 8002 --log-level warning) & \
+	  (cd web && npm run dev) & \
+	  wait
+
+dev-reload:
+	@trap 'kill 0' SIGINT SIGTERM; \
+	  (cd cs_agent_v1 && .venv/bin/uvicorn main:app --port 8001 --reload) & \
+	  (cd cs_agent_v2 && .venv/bin/uvicorn main:app --port 8002 --reload) & \
 	  (cd web && npm run dev) & \
 	  wait
 
