@@ -17,13 +17,14 @@ import type { AgentEvent, AgentVariant } from "./types";
 // string in their `model` field and pass it straight to OpenAIModel; this
 // list just constrains what the UI offers.
 export const SUPPORTED_MODELS = [
+  "gpt-4o-mini",
   "gpt-5.4",
   "gpt-5.4-mini",
   "gpt-5",
   "gpt-5-mini",
 ] as const;
 export type SupportedModel = (typeof SUPPORTED_MODELS)[number];
-export const DEFAULT_MODEL: SupportedModel = "gpt-5.4-mini";
+export const DEFAULT_MODEL: SupportedModel = "gpt-5.4";
 
 export interface AgentService {
   variant: AgentVariant;

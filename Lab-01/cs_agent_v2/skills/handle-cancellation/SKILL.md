@@ -23,6 +23,7 @@ Cancellation flips an order's status to `cancelled` AND usually owes the custome
 6. **Cancel** — `cancel_order(order_id, reason)` with a specific reason (audit-logged). On success you'll get a cancel ref.
 7. **Refund the net** — `issue_refund(order_id, refund_percentage=net_pct, reason="cancel_net_of_prior")`. The server multiplies by `total_usd` and logs both pct and dollar amount. If the call returns a `policy_violation` 403 (over cap), DO NOT split — escalate the full case.
 8. **Confirm in the reply** — cancel ref, refund ref + dollar amount, what's deducted (prior credit) and why, payment-reversal timing.
+9. Check if the special conditions of 'handle-shipping-address-change' apply (customer mentioned a new address). If so, load that skill to handle the address change for any other open orders.
 
 ## Anti-patterns
 
